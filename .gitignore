@@ -3,3 +3,7 @@ node_modules
 Thumbs.db
 npm-debug.log*
 coverage
+chunk_*.js
+velog_*.html
+velog_*.xml
+velog_*.js
