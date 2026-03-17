@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SiteGuard | Passive Web Security Scanner</title>
+    <meta
+      name="description"
+      content="URL 하나로 공개 보안 구성을 점검하고, 점수와 증거, 수정 가이드를 함께 보여주는 패시브 스캐너"
+    />
+    <meta name="theme-color" content="#ff9f43" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+    />
+    <link rel="stylesheet" href="/tailwind.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body class="min-h-screen bg-orange-50/30 font-sans text-slate-900 antialiased">
+    <div
+      class="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(251,146,60,0.18),transparent_26rem),radial-gradient(circle_at_82%_10%,rgba(253,186,116,0.28),transparent_18rem)]"
+      aria-hidden="true"
+    ></div>
+
+    <header class="sticky top-0 z-30 px-4 pt-4 sm:px-6">
+      <nav
+        class="mx-auto flex w-full max-w-[1560px] flex-col gap-4 rounded-full border border-orange-100 bg-white/80 px-5 py-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between"
+      >
+        <a href="#top" class="flex items-center gap-3">
+          <span
+            class="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-orange-400 to-orange-500 font-display text-lg font-extrabold text-white shadow-sm"
+          >
+            SG
+          </span>
+          <span class="flex flex-col leading-none">
+            <strong class="text-base font-semibold text-slate-900">SiteGuard</strong>
+            <small class="mt-1 text-sm text-slate-500">Passive URL Scanner</small>
+          </span>
+        </a>
+
+        <div class="flex flex-wrap items-center gap-2 text-sm font-medium text-slate-600">
+          <a class="rounded-full px-4 py-2 transition hover:bg-orange-50 hover:text-orange-700" href="#dashboard">Dashboard</a>
+          <a class="rounded-full px-4 py-2 transition hover:bg-orange-50 hover:text-orange-700" href="#results">Workspace</a>
+          <a class="rounded-full px-4 py-2 transition hover:bg-orange-50 hover:text-orange-700" href="#scope">Scope</a>
+        </div>
+      </nav>
+    </header>
+
+    <main id="top" class="relative">
+      <section id="dashboard" class="mx-auto w-full max-w-[1560px] px-4 pb-4 pt-12 sm:px-6 lg:pt-16">
+        <div
+          data-reveal
+          class="mb-6 inline-flex items-center rounded-full border border-orange-200 bg-orange-100/70 px-4 py-2 text-sm font-semibold text-orange-700 opacity-0 translate-y-4 transition duration-500"
+        >
+          Passive Web Security Scanner
+        </div>
+
+        <div class="grid gap-6 xl:grid-cols-[1.35fr_0.65fr]">
+          <div
+            data-reveal
+            class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8"
+          >
+            <div class="flex flex-col gap-6">
+              <div class="space-y-3">
+                <h1 class="max-w-3xl font-display text-4xl font-extrabold tracking-tight text-slate-900 sm:text-5xl lg:text-6xl">
+                  URL 하나로 보는 보안 상태 대시보드
+                </h1>
+                <p class="max-w-3xl text-base leading-8 text-slate-600">
+                  HTTPS, 보안 헤더, 쿠키 설정, 리다이렉트 구성을 빠르게 점검하고 수정 우선순위를 한눈에 확인할 수
+                  있습니다. 복잡한 보안 툴 느낌보다, 실제 배포 전에 누구나 돌릴 수 있는 따뜻한 SaaS 워크벤치를 목표로
+                  설계했습니다.
+                </p>
+              </div>
+
+              <div class="flex flex-wrap gap-2">
+                <span class="rounded-full bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700">Public URL only</span>
+                <span class="rounded-full bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700">Passive scan</span>
+                <span class="rounded-full bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700">Evidence first</span>
+                <span class="rounded-full bg-orange-50 px-4 py-2 text-sm font-semibold text-orange-700">Actionable fixes</span>
+              </div>
+
+              <form id="scan-form" class="space-y-4">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <label for="url-input" class="block text-sm font-semibold text-slate-700">Website URL</label>
+                    <p class="mt-1 text-sm text-slate-500">공개적으로 접근 가능한 URL만 검사합니다.</p>
+                  </div>
+                  <div class="flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
+                    <span class="rounded-full bg-orange-50 px-3 py-1.5 text-orange-700">Passive only</span>
+                    <span class="rounded-full bg-orange-50 px-3 py-1.5 text-orange-700">No login</span>
+                  </div>
+                </div>
+
+                <div class="flex flex-col gap-3 lg:flex-row">
+                  <input
+                    id="url-input"
+                    name="url"
+                    type="url"
+                    placeholder="https://example.com"
+                    autocomplete="url"
+                    required
+                    class="h-16 w-full rounded-2xl border border-orange-200 bg-orange-50/50 px-5 text-base text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-orange-400 focus:bg-white"
+                  />
+                  <button
+                    type="submit"
+                    class="submit-button inline-flex h-16 items-center justify-center rounded-2xl bg-orange-500 px-8 text-base font-semibold text-white shadow-sm transition hover:bg-orange-600"
+                  >
+                    Scan now
+                  </button>
+                </div>
+
+                <div class="flex flex-wrap gap-2">
+                  <button type="button" class="sample-chip rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-orange-300 hover:bg-orange-100" data-sample="https://example.com">example.com</button>
+                  <button type="button" class="sample-chip rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-orange-300 hover:bg-orange-100" data-sample="https://developer.mozilla.org">developer.mozilla.org</button>
+                  <button type="button" class="sample-chip rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-orange-300 hover:bg-orange-100" data-sample="https://owasp.org">owasp.org</button>
+                </div>
+              </form>
+
+              <div id="loading-panel" class="hidden rounded-2xl bg-orange-50 p-4">
+                <div class="flex items-center gap-3">
+                  <div class="h-5 w-5 animate-spin rounded-full border-2 border-orange-200 border-t-orange-500"></div>
+                  <p id="loading-text" class="text-sm font-medium text-slate-700">공개 호스트를 확인하는 중...</p>
+                </div>
+              </div>
+
+              <div id="error-panel" class="hidden rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700"></div>
+
+              <div class="grid gap-3 lg:grid-cols-3">
+                <div class="rounded-2xl bg-orange-50 p-4">
+                  <p class="text-sm text-slate-500">검사 범위</p>
+                  <p class="mt-1 font-semibold text-slate-900">Headers / TLS / Cookies</p>
+                </div>
+                <div class="rounded-2xl bg-orange-50 p-4">
+                  <p class="text-sm text-slate-500">스캔 방식</p>
+                  <p class="mt-1 font-semibold text-slate-900">Passive Read-Only</p>
+                </div>
+                <div class="rounded-2xl bg-orange-50 p-4">
+                  <p class="text-sm text-slate-500">결과 형식</p>
+                  <p class="mt-1 font-semibold text-slate-900">Score + Evidence + Fixes</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div data-reveal class="grid gap-6 opacity-0 translate-y-4 transition duration-500">
+            <aside class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm lg:p-8">
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium text-slate-500">Overall Security Score</p>
+                  <h2 class="mt-1 text-2xl font-semibold text-slate-900">site preview</h2>
+                </div>
+                <span id="hero-risk-pill" class="rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-700">Low Risk</span>
+              </div>
+
+              <div class="mt-8 flex items-center gap-5">
+                <div id="score-ring" class="relative grid h-32 w-32 shrink-0 place-items-center rounded-full bg-orange-100 sm:h-36 sm:w-36">
+                  <div class="absolute inset-3 rounded-full bg-white"></div>
+                  <div class="relative text-center">
+                    <div id="score-value" class="font-display text-4xl font-extrabold text-slate-900">92</div>
+                    <div id="score-grade" class="mt-1 text-sm font-semibold text-orange-700">A Grade</div>
+                  </div>
+                </div>
+
+                <div class="min-w-0 space-y-3 text-sm text-slate-600">
+                  <div class="flex items-center justify-between gap-6">
+                    <span>HTTPS 적용</span>
+                    <span class="font-semibold text-emerald-600">Pass</span>
+                  </div>
+                  <div class="flex items-center justify-between gap-6">
+                    <span>보안 헤더</span>
+                    <span class="font-semibold text-amber-600">Review</span>
+                  </div>
+                  <div class="flex items-center justify-between gap-6">
+                    <span>쿠키 설정</span>
+                    <span class="font-semibold text-emerald-600">Pass</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-8 grid grid-cols-3 gap-3">
+                <div class="rounded-2xl bg-orange-50 p-4 text-center">
+                  <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Critical</p>
+                  <p class="mt-2 text-2xl font-bold text-slate-900">0</p>
+                </div>
+                <div class="rounded-2xl bg-orange-50 p-4 text-center">
+                  <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Warnings</p>
+                  <p class="mt-2 text-2xl font-bold text-slate-900">2</p>
+                </div>
+                <div class="rounded-2xl bg-orange-50 p-4 text-center">
+                  <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Checks</p>
+                  <p class="mt-2 text-2xl font-bold text-slate-900">14</p>
+                </div>
+              </div>
+
+              <div class="mt-6 rounded-2xl bg-orange-50 px-4 py-3 text-sm text-slate-600">
+                <p id="score-headline" class="font-medium text-slate-800">가장 먼저 볼 문제: CSP가 설정되어 있지 않습니다</p>
+                <p id="score-risk" class="mt-1 text-slate-500">Risk level: High</p>
+              </div>
+            </aside>
+
+            <aside id="recent-panel" class="hidden rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm">
+              <div class="flex items-center justify-between gap-4">
+                <strong class="text-base font-semibold text-slate-900">Recent scans</strong>
+                <button type="button" id="clear-history-button" class="rounded-full bg-orange-50 px-3 py-1.5 text-sm font-semibold text-orange-700 transition hover:bg-orange-100">clear</button>
+              </div>
+              <div id="recent-list" class="mt-4 grid gap-3"></div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section id="results" class="mx-auto hidden w-full max-w-[1560px] px-4 pb-16 pt-10 sm:px-6">
+        <div
+          id="report-toolbar"
+          class="hidden rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm"
+        >
+          <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div id="report-meta" class="grid gap-1 text-sm text-slate-500"></div>
+            <div class="flex flex-wrap gap-2">
+              <button type="button" id="copy-summary-button" class="rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-orange-100">요약 복사</button>
+              <button type="button" id="copy-json-button" class="rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-orange-100">JSON 복사</button>
+              <button type="button" id="download-json-button" class="rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-orange-100">JSON 저장</button>
+              <button type="button" id="download-md-button" class="rounded-full border border-orange-200 bg-orange-50 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-orange-100">Markdown 저장</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-6 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+          <aside class="grid h-fit gap-6 xl:sticky xl:top-28">
+            <article class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm">
+              <div class="flex items-center justify-between gap-3">
+                <h3 class="font-display text-2xl font-bold text-slate-900">At a glance</h3>
+                <span class="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] text-orange-700">summary</span>
+              </div>
+              <div id="stat-grid" class="mt-5 grid grid-cols-2 gap-3"></div>
+            </article>
+
+            <article class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm">
+              <h3 class="font-display text-2xl font-bold text-slate-900">Fix order</h3>
+              <p class="mt-2 text-sm leading-6 text-slate-500">보고서를 읽기 전에 지금 바로 손대야 할 항목부터 정리합니다.</p>
+              <div id="action-stack" class="mt-5 grid gap-3"></div>
+            </article>
+
+            <article class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm">
+              <h3 class="font-display text-2xl font-bold text-slate-900">Jump to</h3>
+              <p class="mt-2 text-sm leading-6 text-slate-500">긴 결과 화면을 빠르게 탐색할 수 있습니다.</p>
+              <div class="mt-5 grid gap-2">
+                <button type="button" data-scroll-target="findings-panel" class="jump-button rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-orange-100">Priority findings</button>
+                <button type="button" data-scroll-target="checks-panel" class="jump-button rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-orange-100">Check matrix</button>
+                <button type="button" data-scroll-target="evidence-panel" class="jump-button rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-orange-100">Evidence</button>
+                <button type="button" data-scroll-target="transport-panel" class="jump-button rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-orange-100">Transport & cookies</button>
+                <button type="button" data-scroll-target="limitations-panel" class="jump-button rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-orange-100">Limitations</button>
+              </div>
+            </article>
+          </aside>
+
+          <div class="grid gap-6">
+            <article id="findings-panel" data-reveal class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8">
+              <div class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                <div>
+                  <h3 class="font-display text-3xl font-bold text-slate-900">Priority findings</h3>
+                  <p class="mt-2 text-sm leading-6 text-slate-500">위험도에 따라 빠르게 필터링하고, 바로 수정 방향까지 볼 수 있습니다.</p>
+                </div>
+                <div id="finding-filters" class="flex flex-wrap gap-2"></div>
+              </div>
+              <div id="findings-list" class="mt-6 grid gap-4 2xl:grid-cols-2"></div>
+            </article>
+
+            <article id="checks-panel" data-reveal class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8">
+              <div>
+                <h3 class="font-display text-3xl font-bold text-slate-900">Check matrix</h3>
+                <p class="mt-2 text-sm leading-6 text-slate-500">항목별 pass, warn, fail 상태를 넓은 그리드에서 빠르게 비교합니다.</p>
+              </div>
+              <div id="checks-grid" class="mt-6 grid gap-4 md:grid-cols-2 2xl:grid-cols-4"></div>
+            </article>
+
+            <article id="evidence-panel" data-reveal class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8">
+              <div>
+                <h3 class="font-display text-3xl font-bold text-slate-900">Evidence</h3>
+                <p class="mt-2 text-sm leading-6 text-slate-500">리다이렉트 체인과 최종 헤더는 결과를 뒷받침하는 직접 증거입니다.</p>
+              </div>
+              <div class="mt-6 grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
+                <div>
+                  <h4 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Redirect chain</h4>
+                  <div id="redirect-timeline" class="mt-4 grid gap-3"></div>
+                </div>
+                <div>
+                  <h4 class="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Response headers</h4>
+                  <pre id="headers-block" class="mt-4 overflow-auto rounded-2xl bg-gray-900 p-5 text-sm leading-7 text-gray-100"></pre>
+                </div>
+              </div>
+            </article>
+
+            <div class="grid gap-6 xl:grid-cols-2">
+              <article id="transport-panel" data-reveal class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8">
+                <div>
+                  <h3 class="font-display text-3xl font-bold text-slate-900">Transport & cookies</h3>
+                  <p class="mt-2 text-sm leading-6 text-slate-500">TLS 정보와 Set-Cookie 플래그 상태를 나란히 비교합니다.</p>
+                </div>
+                <div class="mt-6 grid gap-4">
+                  <div id="tls-card" class="rounded-2xl border border-orange-100 bg-orange-50/40 p-5"></div>
+                  <div id="cookies-card" class="rounded-2xl border border-orange-100 bg-orange-50/40 p-5"></div>
+                </div>
+              </article>
+
+              <article id="limitations-panel" data-reveal class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8">
+                <div>
+                  <h3 class="font-display text-3xl font-bold text-slate-900">Limits & notes</h3>
+                  <p class="mt-2 text-sm leading-6 text-slate-500">하지 않는 것을 명확히 보여줘야 결과를 과신하지 않게 됩니다.</p>
+                </div>
+                <div id="limitations-list" class="mt-6 grid gap-3 md:grid-cols-2"></div>
+              </article>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="scope" class="mx-auto w-full max-w-[1560px] px-4 pb-20 pt-6 sm:px-6">
+        <div class="grid gap-6 xl:grid-cols-2">
+          <article data-reveal class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8">
+            <p class="inline-flex rounded-full bg-orange-100 px-4 py-2 text-sm font-semibold text-orange-700">Can inspect</p>
+            <h3 class="mt-4 font-display text-3xl font-bold text-slate-900">공개적으로 확인 가능한 범위</h3>
+            <ul class="mt-5 space-y-3 text-sm leading-7 text-slate-600">
+              <li>HTTPS 지원과 리다이렉트</li>
+              <li>TLS 인증서 상태</li>
+              <li>HSTS, CSP, X-Frame-Options, nosniff</li>
+              <li>Referrer-Policy, Permissions-Policy</li>
+              <li>쿠키 속성, 명백한 CORS 오설정</li>
+              <li>혼합 콘텐츠, 안전하지 않은 로그인 폼 신호</li>
+            </ul>
+          </article>
+
+          <article data-reveal class="rounded-[28px] border border-orange-100 bg-white p-6 shadow-sm opacity-0 translate-y-4 transition duration-500 lg:p-8">
+            <p class="inline-flex rounded-full bg-orange-100 px-4 py-2 text-sm font-semibold text-orange-700">Cannot confirm</p>
+            <h3 class="mt-4 font-display text-3xl font-bold text-slate-900">이 도구가 확정하지 않는 범위</h3>
+            <ul class="mt-5 space-y-3 text-sm leading-7 text-slate-600">
+              <li>IDOR, Broken Access Control</li>
+              <li>SQL Injection, XSS, 파일 업로드 취약점</li>
+              <li>로그인 후 화면과 내부망 자산</li>
+              <li>비즈니스 로직 전체의 안전성</li>
+            </ul>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

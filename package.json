@@ -1,0 +1,21 @@
+{
+  "name": "siteguard-passive-scanner",
+  "version": "1.0.0",
+  "description": "Passive public web security posture scanner with evidence and remediation guidance.",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:css",
+    "build:css": "npx @tailwindcss/cli -i ./src/tailwind.css -o ./public/tailwind.css --minify",
+    "dev:css": "npx @tailwindcss/cli -i ./src/tailwind.css -o ./public/tailwind.css --watch",
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.2.1",
+    "tailwindcss": "^4.2.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
