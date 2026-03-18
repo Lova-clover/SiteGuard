@@ -323,6 +323,56 @@ const REMEDIATION_MAP = {
       }
     ],
     references: []
+  },
+  missing_security_txt: {
+    title: "security.txt를 공개하세요",
+    whyItMatters: "외부 제보자가 올바른 연락처로 바로 전달할 수 있어 대응 속도와 신뢰도가 좋아집니다.",
+    actions: [
+      "/.well-known/security.txt 또는 /security.txt에 Contact와 Expires를 포함한 파일을 배포하세요.",
+      "가능하면 Preferred-Languages, Canonical, PGP 정보도 함께 적어 주세요."
+    ],
+    snippets: [
+      {
+        label: "security.txt 예시",
+        code: "Contact: mailto:security@example.com\nExpires: 2026-12-31T23:59:00Z\nPreferred-Languages: ko, en\nCanonical: https://example.com/.well-known/security.txt"
+      }
+    ],
+    references: [
+      {
+        label: "RFC 9116",
+        href: "https://www.rfc-editor.org/rfc/rfc9116.html"
+      }
+    ]
+  },
+  incomplete_security_txt: {
+    title: "security.txt 정보를 보완하세요",
+    whyItMatters: "연락처나 만료일이 빠져 있으면 제보자가 실제로 사용 가능한 경로인지 판단하기 어렵습니다.",
+    actions: [
+      "Contact와 Expires를 모두 포함해 파일이 유효한 기간과 연락 수단을 분명히 하세요.",
+      "운영 흐름에 맞으면 Canonical과 Preferred-Languages도 추가하세요."
+    ],
+    snippets: [],
+    references: [
+      {
+        label: "RFC 9116",
+        href: "https://www.rfc-editor.org/rfc/rfc9116.html"
+      }
+    ]
+  },
+  stale_security_txt: {
+    title: "security.txt 만료일을 갱신하세요",
+    whyItMatters: "만료된 security.txt는 실제로 관리 중인지 확신을 주지 못해 외부 제보가 지연될 수 있습니다.",
+    actions: [
+      "Expires 값을 앞으로 유효한 날짜로 갱신하세요.",
+      "기재된 연락처가 지금도 실제로 운영 중인지 함께 확인하세요."
+    ],
+    snippets: [],
+    references: [
+      {
+        label: "RFC 9116",
+        href: "https://www.rfc-editor.org/rfc/rfc9116.html"
+      }
+    ]
   }
 };
 

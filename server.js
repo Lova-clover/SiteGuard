@@ -307,11 +307,14 @@ export function createAppServer({ scan = scanTarget } = {}) {
 
 export function startServer(port = PORT) {
   const server = createAppServer();
-  server.listen(port, () => {
+  server.listen(port, "0.0.0.0", () => {
     console.log(`SiteGuard server listening on http://localhost:${port}`);
   });
   return server;
 }
+
+process.on('unhandledRejection', (reason, promise) => { console.error('Unhandled Rejection at:', promise, 'reason:', reason); });
+process.on('uncaughtException', (error) => { console.error('Uncaught Exception:', error); });
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   startServer();

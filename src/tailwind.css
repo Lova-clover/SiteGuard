@@ -1,6 +1,205 @@
-@import "tailwindcss";
+﻿@import "tailwindcss";
 
 @theme {
   --font-sans: "Pretendard", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Sora", "Pretendard", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer base {
+  :root {
+    --brand-orange: #c9972b;
+    --brand-gold: #f0c95e;
+    --brand-brown: #0f172a;
+    --brand-ink: #0f172a;
+    --brand-muted: #475569;
+    --brand-line: rgba(148, 163, 184, 0.22);
+    --brand-panel: rgba(255, 255, 255, 0.9);
+    --brand-panel-strong: #ffffff;
+    --brand-surface: #f8fafc;
+    --brand-surface-warm: #fff9ec;
+    --brand-shadow: 0 24px 80px rgba(15, 23, 42, 0.08);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply min-h-screen bg-slate-50 font-sans text-slate-800 antialiased;
+    background-image:
+      radial-gradient(circle at top left, rgba(240, 201, 94, 0.16), transparent 32%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 1) 22%, rgba(248, 250, 252, 1) 100%);
+  }
+
+  code {
+    @apply rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[0.95em] text-slate-700;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+}
+
+@layer components {
+  .page-shell {
+    @apply relative min-h-screen overflow-x-hidden;
+  }
+
+  .page-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(rgba(15, 23, 42, 0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.03) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.28), transparent 42%);
+  }
+
+  .app-frame {
+    @apply mx-auto w-full max-w-[1640px] px-4 sm:px-6 lg:px-8;
+  }
+
+  .topbar {
+    @apply fixed inset-x-0 top-0 z-50 border-b border-slate-200/80 bg-white/78 backdrop-blur-xl;
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.05);
+  }
+
+  .nav-link {
+    @apply rounded-full px-4 py-2 transition-colors duration-200 hover:bg-amber-50 hover:text-slate-950;
+  }
+
+  .panel-card {
+    @apply relative overflow-hidden rounded-[32px] border border-slate-200/90 bg-white/90 backdrop-blur;
+    box-shadow: var(--brand-shadow);
+  }
+
+  .panel-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 18%);
+  }
+
+  .section-heading {
+    @apply flex flex-col justify-between gap-3 md:flex-row md:items-end;
+  }
+
+  .section-title {
+    @apply text-2xl font-semibold tracking-tight text-slate-950;
+  }
+
+  .primary-button {
+    @apply inline-flex items-center justify-center rounded-2xl border border-amber-600 bg-slate-950 px-6 py-4 text-base font-semibold text-white transition-all duration-200 hover:-translate-y-0.5 hover:bg-slate-900 focus:outline-none focus:ring-4 focus:ring-slate-900/10 disabled:cursor-not-allowed disabled:opacity-60;
+    box-shadow: 0 18px 36px rgba(15, 23, 42, 0.18);
+  }
+
+  .secondary-button {
+    @apply inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-950;
+  }
+
+  .secondary-button-subtle {
+    @apply bg-slate-50 text-slate-600;
+  }
+
+  .input-field {
+    @apply w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-base text-slate-900 outline-none transition-all duration-200 placeholder:text-slate-400 focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-500/10;
+  }
+
+  .feature-chip {
+    @apply inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-medium text-slate-600;
+  }
+
+  .chip {
+    @apply inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold tracking-[0.16em] text-slate-600 uppercase;
+  }
+
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.26em] text-amber-700;
+  }
+
+  .score-ring-large {
+    @apply relative flex h-56 w-56 items-center justify-center rounded-full border border-white/90 bg-white shadow-[0_24px_50px_rgba(15,23,42,0.08)];
+  }
+
+  .score-ring-core {
+    @apply flex h-[calc(100%-22px)] w-[calc(100%-22px)] flex-col items-center justify-center rounded-full bg-white text-center;
+  }
+
+  .score-number {
+    @apply text-6xl font-display font-semibold tracking-[-0.08em] text-slate-950;
+  }
+
+  .score-grade {
+    @apply mt-2 text-sm font-semibold uppercase tracking-[0.3em] text-amber-700;
+  }
+
+  .mini-metric-card {
+    @apply rounded-[24px] border border-slate-200 bg-slate-50/80 p-4;
+  }
+
+  .mini-metric-label {
+    @apply block text-xs font-semibold uppercase tracking-[0.22em] text-slate-500;
+  }
+
+  .mini-metric-value {
+    @apply mt-3 block text-lg font-semibold tracking-tight text-slate-950;
+  }
+
+  .mini-metric-detail {
+    @apply mt-2 block text-sm leading-6 text-slate-500;
+  }
+
+  .metric-card {
+    @apply flex flex-col rounded-[24px] border border-slate-200 bg-slate-50/80 p-5;
+  }
+
+  .detail-card {
+    @apply rounded-[24px] border border-slate-200 bg-slate-50/70 p-5;
+  }
+
+  .soft-code {
+    @apply rounded-2xl border border-slate-200 bg-slate-50 p-4;
+  }
+
+  .detail-accordion {
+    @apply overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_16px_44px_rgba(15,23,42,0.06)];
+  }
+
+  .detail-accordion-summary {
+    @apply cursor-pointer list-none px-6 py-5 text-lg font-semibold tracking-tight text-slate-950 transition-colors hover:bg-slate-50;
+  }
+
+  .detail-accordion-body {
+    @apply border-t border-slate-200 px-6 py-6;
+  }
+
+  .status-dot {
+    @apply h-3 w-3 rounded-full bg-amber-500;
+    box-shadow: 0 0 0 6px rgba(201, 151, 43, 0.12);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(148, 163, 184, 0.12);
+    border-radius: 999px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.42);
+    border-radius: 999px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(71, 85, 105, 0.58);
+  }
+
+  .sr-only {
+    @apply absolute h-px w-px overflow-hidden whitespace-nowrap border-0 p-0;
+    clip: rect(0, 0, 0, 0);
+    margin: -1px;
+  }
 }

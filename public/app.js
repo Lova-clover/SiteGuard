@@ -1,658 +1,746 @@
-const HISTORY_KEY = "siteguard:recent-scans";
-const MAX_HISTORY_ITEMS = 6;
+const STORAGE_KEY = "siteguard:scan-snapshots:v2";
+const MAX_HISTORY_ITEMS = 8;
+
 const FINDING_FILTERS = [
-  { id: "all", label: "All" },
-  { id: "urgent", label: "Urgent" },
-  { id: "medium", label: "Medium" },
-  { id: "low", label: "Low" }
+  { id: "all", label: "전체" },
+  { id: "critical", label: "치명" },
+  { id: "high", label: "높음" },
+  { id: "medium", label: "중간" },
+  { id: "low", label: "낮음" }
 ];
 
-const severityStyles = {
-  critical: "bg-red-500 text-white",
-  high: "bg-orange-500 text-white",
-  medium: "bg-amber-200 text-amber-900",
-  low: "bg-stone-200 text-stone-700"
-};
-
-const statusStyles = {
-  pass: "bg-emerald-500 text-white",
-  warn: "bg-amber-200 text-amber-900",
-  fail: "bg-red-500 text-white",
-  na: "bg-stone-200 text-stone-700"
-};
-
-const riskStyles = {
-  Critical: "bg-red-50 text-red-700",
-  High: "bg-orange-50 text-orange-700",
-  Moderate: "bg-amber-50 text-amber-700",
-  Low: "bg-emerald-50 text-emerald-700"
-};
-
-const loadingMessages = [
-  "공개 호스트를 확인하는 중...",
-  "리다이렉트 체인을 따라가는 중...",
-  "헤더와 쿠키 구성을 읽는 중...",
-  "TLS와 HTML 신호를 점검하는 중...",
-  "수정 가이드를 준비하는 중..."
+const LOADING_MESSAGES = [
+  "보안 점검을 진행하고 있습니다...",
+  "응답 헤더를 분석하고 있습니다...",
+  "TLS 설정을 확인하고 있습니다...",
+  "쿠키 보안을 점검하고 있습니다..."
 ];
 
-const errorCodeMessages = {
+const ERROR_MESSAGES = {
   BODY_TOO_LARGE: "요청 데이터가 너무 큽니다.",
   ENOTFOUND: "도메인을 찾을 수 없습니다.",
   INVALID_JSON: "요청 형식이 올바르지 않습니다.",
   INVALID_URL: "URL 형식이 올바르지 않습니다.",
-  PRIVATE_DNS_TARGET_BLOCKED: "사설 또는 내부망으로 해석되는 도메인은 검사할 수 없습니다.",
+  PRIVATE_DNS_TARGET_BLOCKED: "사설망으로 해석되는 대상은 검사할 수 없습니다.",
   PRIVATE_HOST_BLOCKED: "localhost, internal, local 도메인은 검사할 수 없습니다.",
   PRIVATE_IP_BLOCKED: "사설 또는 예약된 IP는 검사할 수 없습니다.",
-  RATE_LIMITED: "지금 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
-  REQUEST_TIMEOUT: "대상 서버 응답이 너무 오래 걸립니다.",
-  SCAN_QUEUE_FULL: "스캐너가 바쁩니다. 잠시 후 다시 시도해 주세요.",
-  UNSUPPORTED_CONTENT_TYPE: "서버 요청 형식이 올바르지 않습니다.",
+  RATE_LIMITED: "요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+  REQUEST_TIMEOUT: "대상 서버 응답이 오래 걸려 스캔을 중단했습니다.",
+  SCAN_QUEUE_FULL: "현재 스캐너가 바쁩니다. 잠시 후 다시 시도해 주세요.",
+  UNSUPPORTED_CONTENT_TYPE: "요청은 JSON 형식이어야 합니다.",
   UNSUPPORTED_PROTOCOL: "http 또는 https URL만 검사할 수 있습니다.",
   URL_REQUIRED: "검사할 URL을 입력해 주세요.",
   URL_WITH_CREDENTIALS: "아이디나 비밀번호가 포함된 URL은 지원하지 않습니다."
 };
 
-const form = document.querySelector("#scan-form");
-const urlInput = document.querySelector("#url-input");
-const loadingPanel = document.querySelector("#loading-panel");
-const loadingText = document.querySelector("#loading-text");
-const errorPanel = document.querySelector("#error-panel");
-const resultsSection = document.querySelector("#results");
-const reportToolbar = document.querySelector("#report-toolbar");
-const reportMeta = document.querySelector("#report-meta");
-const recentPanel = document.querySelector("#recent-panel");
-const recentList = document.querySelector("#recent-list");
-const clearHistoryButton = document.querySelector("#clear-history-button");
-const limitationsList = document.querySelector("#limitations-list");
-const actionStack = document.querySelector("#action-stack");
-const findingFilters = document.querySelector("#finding-filters");
-const heroRiskPill = document.querySelector("#hero-risk-pill");
+const severityLabels = {
+  critical: "치명",
+  high: "높음",
+  medium: "중간",
+  low: "낮음",
+  info: "정보",
+  pass: "통과"
+};
 
-const scoreRing = document.querySelector("#score-ring");
-const scoreValue = document.querySelector("#score-value");
-const scoreGrade = document.querySelector("#score-grade");
-const scoreHeadline = document.querySelector("#score-headline");
-const scoreRisk = document.querySelector("#score-risk");
-const statGrid = document.querySelector("#stat-grid");
-const findingsList = document.querySelector("#findings-list");
-const checksGrid = document.querySelector("#checks-grid");
-const redirectTimeline = document.querySelector("#redirect-timeline");
-const headersBlock = document.querySelector("#headers-block");
-const tlsCard = document.querySelector("#tls-card");
-const cookiesCard = document.querySelector("#cookies-card");
+let currentResult = null;
+let currentFilter = "all";
+let loadingInterval = null;
 
-const copySummaryButton = document.querySelector("#copy-summary-button");
-const copyJsonButton = document.querySelector("#copy-json-button");
-const downloadJsonButton = document.querySelector("#download-json-button");
-const downloadMarkdownButton = document.querySelector("#download-md-button");
+// DOM Elements
+const elements = {};
 
-let loadingTimer = null;
-let lastReport = null;
-let activeFindingFilter = "all";
+// Initialize
+document.addEventListener("DOMContentLoaded", () => {
+  cacheElements();
+  setupEventListeners();
+  renderHistory();
+  checkHashNavigation();
+});
 
-setupSamples();
-setupRevealObserver();
-setupHistory();
-setupToolbarActions();
-setupJumpNavigation();
+function cacheElements() {
+  elements.scanForm = document.getElementById("scan-form");
+  elements.urlInput = document.getElementById("url-input");
+  elements.submitButton = document.getElementById("submit-button");
+  elements.loadingPanel = document.getElementById("loading-panel");
+  elements.loadingText = document.getElementById("loading-text");
+  elements.errorPanel = document.getElementById("error-panel");
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
+  elements.scannerSection = document.getElementById("scanner-section");
+  elements.resultsSection = document.getElementById("results-section");
+  elements.historySection = document.getElementById("history-section");
 
-  const url = urlInput.value.trim();
-  if (!url) {
-    showError(errorCodeMessages.URL_REQUIRED);
-    return;
-  }
+  elements.resultUrl = document.getElementById("result-url");
+  elements.resultMeta = document.getElementById("result-meta");
+  elements.scoreNumber = document.getElementById("score-number");
+  elements.scoreGrade = document.getElementById("score-grade");
+  elements.scoreRingProgress = document.getElementById("score-ring-progress");
+  elements.riskBadge = document.getElementById("risk-badge");
+  elements.summaryHeadline = document.getElementById("summary-headline");
+  elements.summaryBody = document.getElementById("summary-body");
 
-  clearError();
-  setLoading(true);
+  elements.statPasses = document.getElementById("stat-passes");
+  elements.statWarnings = document.getElementById("stat-warnings");
+  elements.statFailures = document.getElementById("stat-failures");
+
+  elements.actionsList = document.getElementById("actions-list");
+  elements.findingsFilters = document.getElementById("findings-filters");
+  elements.findingsList = document.getElementById("findings-list");
+  elements.checksGrid = document.getElementById("checks-grid");
+  elements.redirectTimeline = document.getElementById("redirect-timeline");
+  elements.headersBlock = document.getElementById("headers-block");
+  elements.tlsCard = document.getElementById("tls-card");
+  elements.cookiesCard = document.getElementById("cookies-card");
+
+  elements.historyGrid = document.getElementById("history-grid");
+  elements.historyEmpty = document.getElementById("history-empty");
+  elements.clearHistoryBtn = document.getElementById("clear-history-btn");
+
+  elements.backToScanner = document.getElementById("back-to-scanner");
+  elements.copySummaryBtn = document.getElementById("copy-summary-btn");
+  elements.copyJsonBtn = document.getElementById("copy-json-btn");
+  elements.downloadJsonBtn = document.getElementById("download-json-btn");
+  elements.downloadMdBtn = document.getElementById("download-md-btn");
+}
+
+function setupEventListeners() {
+  elements.scanForm.addEventListener("submit", handleScan);
+
+  document.querySelectorAll("[data-sample]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      elements.urlInput.value = btn.dataset.sample;
+      elements.scanForm.dispatchEvent(new Event("submit"));
+    });
+  });
+
+  document.querySelectorAll("[data-nav]").forEach(link => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      const target = link.dataset.nav;
+      if (target === "scanner") showScanner();
+      else if (target === "history") showHistory();
+    });
+  });
+
+  elements.backToScanner.addEventListener("click", showScanner);
+  document.getElementById("logo-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    showScanner();
+  });
+
+  elements.clearHistoryBtn.addEventListener("click", clearHistory);
+
+  elements.copySummaryBtn.addEventListener("click", copySummary);
+  elements.copyJsonBtn.addEventListener("click", copyJson);
+  elements.downloadJsonBtn.addEventListener("click", downloadJson);
+  elements.downloadMdBtn.addEventListener("click", downloadMarkdown);
+}
+
+function checkHashNavigation() {
+  const hash = window.location.hash;
+  if (hash === "#history") showHistory();
+  else if (hash === "#results" && currentResult) showResults();
+}
+
+// Scanning
+async function handleScan(e) {
+  e.preventDefault();
+
+  const url = elements.urlInput.value.trim();
+  if (!url) return;
+
+  showLoading();
 
   try {
     const response = await fetch("/api/scan", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url })
     });
 
-    const payload = await response.json();
+    const data = await response.json();
 
-    if (!response.ok || !payload.ok) {
-      const errorCode = payload?.error?.code;
-      throw new Error(errorCodeMessages[errorCode] || payload?.error?.message || "검사에 실패했습니다.");
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error?.code || "UNKNOWN_ERROR");
     }
 
-    activeFindingFilter = "all";
-    lastReport = payload;
-    renderReport(payload);
-    saveRecentScan(payload.target.finalUrl || payload.target.normalized || url);
-    resultsSection.classList.remove("hidden");
-    reportToolbar.classList.remove("hidden");
-    resultsSection.scrollIntoView({ behavior: "smooth", block: "start" });
-  } catch (error) {
-    showError(error.message || "검사 중 오류가 발생했습니다.");
+    currentResult = data;
+    saveToHistory(data);
+    renderResults(data);
+    showResults();
+  } catch (err) {
+    showError(ERROR_MESSAGES[err.message] || err.message || "점검 중 오류가 발생했습니다.");
   } finally {
-    setLoading(false);
+    hideLoading();
   }
-});
-
-function setupSamples() {
-  document.querySelectorAll("[data-sample]").forEach((button) => {
-    button.addEventListener("click", () => {
-      urlInput.value = button.dataset.sample || "";
-      urlInput.focus();
-    });
-  });
 }
 
-function setupRevealObserver() {
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
-      if (entry.isIntersecting) {
-        entry.target.classList.remove("opacity-0", "translate-y-4");
-        entry.target.classList.add("opacity-100", "translate-y-0");
-        observer.unobserve(entry.target);
-      }
-    });
-  }, { threshold: 0.12 });
+function showLoading() {
+  elements.loadingPanel.classList.add("show");
+  elements.errorPanel.classList.remove("show");
+  elements.submitButton.disabled = true;
 
-  document.querySelectorAll("[data-reveal]").forEach((element) => {
-    observer.observe(element);
-  });
+  let msgIndex = 0;
+  elements.loadingText.textContent = LOADING_MESSAGES[0];
+  loadingInterval = setInterval(() => {
+    msgIndex = (msgIndex + 1) % LOADING_MESSAGES.length;
+    elements.loadingText.textContent = LOADING_MESSAGES[msgIndex];
+  }, 2000);
 }
 
-function setupToolbarActions() {
-  copySummaryButton.addEventListener("click", async () => {
-    if (!lastReport) return;
-    await navigator.clipboard.writeText(buildSummaryText(lastReport));
-    flashButton(copySummaryButton, "복사됨", "요약 복사");
-  });
-
-  copyJsonButton.addEventListener("click", async () => {
-    if (!lastReport) return;
-    await navigator.clipboard.writeText(JSON.stringify(lastReport, null, 2));
-    flashButton(copyJsonButton, "복사됨", "JSON 복사");
-  });
-
-  downloadJsonButton.addEventListener("click", () => {
-    if (!lastReport) return;
-    downloadFile(
-      buildFilename(lastReport, "json"),
-      JSON.stringify(lastReport, null, 2),
-      "application/json"
-    );
-  });
-
-  downloadMarkdownButton.addEventListener("click", () => {
-    if (!lastReport) return;
-    downloadFile(
-      buildFilename(lastReport, "md"),
-      buildMarkdown(lastReport),
-      "text/markdown"
-    );
-  });
-}
-
-function setupJumpNavigation() {
-  document.querySelectorAll("[data-scroll-target]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const target = document.getElementById(button.dataset.scrollTarget || "");
-      if (target) {
-        target.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    });
-  });
-}
-
-function setupHistory() {
-  renderHistory();
-
-  clearHistoryButton?.addEventListener("click", () => {
-    window.localStorage.removeItem(HISTORY_KEY);
-    renderHistory();
-  });
-}
-
-function setLoading(isLoading) {
-  loadingPanel.classList.toggle("hidden", !isLoading);
-  form.querySelector(".submit-button").disabled = isLoading;
-
-  if (isLoading) {
-    let index = 0;
-    loadingText.textContent = loadingMessages[0];
-    loadingTimer = window.setInterval(() => {
-      index = (index + 1) % loadingMessages.length;
-      loadingText.textContent = loadingMessages[index];
-    }, 950);
-  } else if (loadingTimer) {
-    clearInterval(loadingTimer);
-    loadingTimer = null;
+function hideLoading() {
+  elements.loadingPanel.classList.remove("show");
+  elements.submitButton.disabled = false;
+  if (loadingInterval) {
+    clearInterval(loadingInterval);
+    loadingInterval = null;
   }
 }
 
 function showError(message) {
-  errorPanel.textContent = message;
-  errorPanel.classList.remove("hidden");
+  elements.errorPanel.textContent = message;
+  elements.errorPanel.classList.add("show");
 }
 
-function clearError() {
-  errorPanel.textContent = "";
-  errorPanel.classList.add("hidden");
+// Views
+function showScanner() {
+  elements.scannerSection.style.display = "block";
+  elements.resultsSection.classList.remove("show");
+  elements.historySection.classList.remove("show");
+  window.location.hash = "";
 }
 
-function renderReport(report) {
-  renderScore(report.summary);
-  renderMeta(report);
-  renderStats(report.summary, report.evidence);
-  renderActionStack(report.findings);
-  renderFindingFilters(report.findings);
-  renderFindings(report.findings);
-  renderChecks(report.checks);
-  renderTimeline(report.evidence.redirectChain);
-  renderHeaders(report.evidence.finalHeaders);
-  renderTls(report.evidence.tls);
-  renderCookies(report.evidence.cookies);
-  renderLimitations(report.limitations || []);
+function showResults() {
+  elements.scannerSection.style.display = "none";
+  elements.resultsSection.classList.add("show");
+  elements.historySection.classList.remove("show");
+  window.location.hash = "results";
+  window.scrollTo(0, 0);
 }
 
-function renderScore(summary) {
-  scoreValue.textContent = String(summary.score);
-  scoreGrade.textContent = `${summary.grade} Grade`;
-  scoreHeadline.textContent = summary.headline;
-  scoreRisk.textContent = `Risk level: ${summary.riskLevel}`;
-
-  const safeScore = Math.max(0, Math.min(summary.score, 100));
-  const degrees = safeScore * 3.6;
-  scoreRing.style.background = `conic-gradient(rgb(249 115 22) 0deg, rgb(251 146 60) ${degrees}deg, rgba(253,186,116,0.22) ${degrees}deg, rgba(253,186,116,0.22) 360deg)`;
-
-  heroRiskPill.className = `rounded-full px-3 py-1 text-sm font-semibold ${riskClass(summary.riskLevel)}`;
-  heroRiskPill.textContent = `${summary.riskLevel} Risk`;
+function showHistory() {
+  elements.scannerSection.style.display = "none";
+  elements.resultsSection.classList.remove("show");
+  elements.historySection.classList.add("show");
+  window.location.hash = "history";
+  renderHistory();
 }
 
-function renderMeta(report) {
-  const scanTime = new Date(report.target.scannedAt).toLocaleString("ko-KR");
-  const cachedLabel = report.meta?.cached ? "cached result" : "fresh scan";
+// Render Results
+function renderResults(data) {
+  // Extract data from API response
+  const summary = data.summary || {};
+  const target = data.target || {};
+  const evidence = data.evidence || {};
+  const findings = data.findings || [];
+  const checks = data.checks || [];
 
-  reportMeta.innerHTML = `
-    <strong class="text-base font-semibold text-slate-900">${escapeHtml(report.target.finalUrl || report.target.normalized)}</strong>
-    <span>${escapeHtml(scanTime)} · ${escapeHtml(cachedLabel)} · ${escapeHtml(report.target.publicScanMode || "passive")}</span>
-    <span>request id: ${escapeHtml(report.meta?.requestId || "n/a")} · ${escapeHtml(String(report.meta?.durationMs ?? 0))} ms</span>
-  `;
+  const score = summary.score ?? 0;
+  const grade = summary.grade || "-";
+  const riskLevel = summary.riskLevel || "-";
+
+  // URL and meta
+  if (elements.resultUrl) {
+    elements.resultUrl.textContent = target.hostname || target.finalUrl || "";
+  }
+  if (elements.resultMeta) {
+    elements.resultMeta.textContent = `${target.finalUrl || ""} • ${new Date(target.scannedAt || Date.now()).toLocaleString("ko-KR")}`;
+  }
+
+  // Score ring animation
+  const circumference = 2 * Math.PI * 42;
+  const offset = circumference - (score / 100) * circumference;
+  elements.scoreRingProgress.style.strokeDashoffset = offset;
+
+  // Use gradient for score ring, but change based on grade for accessibility
+  const gradeColor = getGradeColor(grade);
+  // Keep using gradient, but update gradient stops dynamically would be complex
+  // So we'll use the defined gradient in SVG
+
+  // Animate score number
+  animateNumber(elements.scoreNumber, score);
+
+  // Grade badge
+  elements.scoreGrade.textContent = grade;
+  elements.scoreGrade.className = `score-grade ${getGradeClass(grade)}`;
+
+  // Risk badge
+  if (elements.riskBadge) {
+    elements.riskBadge.textContent = `위험도: ${riskLevel}`;
+    elements.riskBadge.className = `risk-badge ${getRiskClass(riskLevel)}`;
+  }
+
+  // Summary
+  elements.summaryHeadline.textContent = summary.headline || "";
+  elements.summaryBody.innerHTML = generateSummaryBody(summary, findings);
+
+  // Stats
+  if (elements.statPasses) elements.statPasses.textContent = summary.passes ?? 0;
+  if (elements.statWarnings) elements.statWarnings.textContent = summary.warnings ?? 0;
+  if (elements.statFailures) elements.statFailures.textContent = summary.failures ?? 0;
+
+  // Actions (generate from findings)
+  renderActions(findings);
+
+  // Finding filters
+  renderFindingFilters();
+
+  // Findings
+  renderFindings(findings);
+
+  // Checks
+  renderChecks(checks);
+
+  // Redirect timeline
+  renderRedirects(evidence.redirectChain);
+
+  // Headers
+  renderHeaders(evidence.finalHeaders);
+
+  // TLS
+  renderTLS(evidence.tls);
+
+  // Cookies
+  renderCookies(evidence.cookies);
 }
 
-function renderStats(summary, evidence) {
-  const cards = [
-    { label: "Critical", value: summary.counts.critical },
-    { label: "High", value: summary.counts.high },
-    { label: "Redirects", value: summary.counts.redirects },
-    { label: "Cookies", value: evidence.cookies.length }
-  ];
+function generateSummaryBody(summary, findings) {
+  const counts = summary.counts || {};
+  const parts = [];
 
-  statGrid.innerHTML = cards.map((card) => `
-    <article class="rounded-2xl border border-orange-100 bg-orange-50/60 p-4">
-      <small class="text-xs uppercase tracking-[0.18em] text-slate-500">${escapeHtml(card.label)}</small>
-      <strong class="mt-2 block text-2xl font-bold text-slate-900">${escapeHtml(String(card.value))}</strong>
-    </article>
-  `).join("");
+  if (counts.critical > 0) parts.push(`<span class="text-danger">치명 ${counts.critical}개</span>`);
+  if (counts.high > 0) parts.push(`<span class="text-warning">높음 ${counts.high}개</span>`);
+  if (counts.medium > 0) parts.push(`<span class="text-muted">중간 ${counts.medium}개</span>`);
+
+  if (parts.length > 0) {
+    return `발견된 문제: ${parts.join(", ")}`;
+  }
+  return "공개적으로 확인 가능한 기본 보안 항목은 양호합니다.";
 }
 
-function renderActionStack(findings) {
-  const items = findings.slice(0, 4).map((finding) => ({
-    severity: finding.severity,
-    title: finding.title,
-    action: finding.remediation?.actions?.[0] || finding.summary
-  }));
+function getGradeClass(grade) {
+  if (grade === "A" || grade === "A+") return "excellent";
+  if (grade === "B" || grade === "B+") return "good";
+  if (grade === "C" || grade === "C+") return "warning";
+  return "danger";
+}
 
-  if (!items.length) {
-    actionStack.innerHTML = `
-      <article class="rounded-2xl border border-orange-100 bg-orange-50/50 p-4">
-        <strong class="block text-sm font-semibold text-slate-900">지금 바로 고칠 고위험 항목은 보이지 않습니다</strong>
-        <p class="mt-2 text-sm leading-6 text-slate-500">그래도 인증 흐름과 권한 모델은 별도의 테스트가 필요합니다.</p>
-      </article>
-    `;
+function getGradeColor(grade) {
+  if (grade === "A" || grade === "A+") return "#16a34a";
+  if (grade === "B" || grade === "B+") return "#2563eb";
+  if (grade === "C" || grade === "C+") return "#ca8a04";
+  return "#dc2626";
+}
+
+function getRiskClass(risk) {
+  if (risk === "Low") return "low";
+  if (risk === "Moderate") return "moderate";
+  if (risk === "High") return "high";
+  return "critical";
+}
+
+function animateNumber(element, target) {
+  if (!element) return;
+  const targetNum = Number(target) || 0;
+  let current = 0;
+  const duration = 800;
+  const step = targetNum / (duration / 16);
+
+  const animate = () => {
+    current += step;
+    if (current >= targetNum) {
+      element.textContent = targetNum;
+    } else {
+      element.textContent = Math.floor(current);
+      requestAnimationFrame(animate);
+    }
+  };
+  animate();
+}
+
+function renderActions(findings) {
+  if (!elements.actionsList) return;
+
+  // Generate action items from findings
+  const urgentFindings = findings.filter(f => f.severity === "critical" || f.severity === "high");
+  const otherFindings = findings.filter(f => f.severity === "medium" || f.severity === "low");
+
+  if (!findings.length) {
+    elements.actionsList.innerHTML = `<div class="empty-state-inline">모든 보안 점검 항목이 양호합니다.</div>`;
     return;
   }
 
-  actionStack.innerHTML = items.map((item) => `
-    <article class="rounded-2xl border border-orange-100 bg-orange-50/50 p-4">
-      <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${severityClass(item.severity)}">${escapeHtml(item.severity)}</span>
-      <strong class="mt-3 block text-sm font-semibold text-slate-900">${escapeHtml(item.title)}</strong>
-      <p class="mt-2 text-sm leading-6 text-slate-500">${escapeHtml(item.action)}</p>
-    </article>
-  `).join("");
+  let html = "";
+
+  if (urgentFindings.length > 0) {
+    html += `<div class="action-group">
+      <div class="action-group-title urgent">즉시 조치 필요</div>
+      ${urgentFindings.slice(0, 5).map((f, i) => `
+        <div class="action-item urgent">
+          <span class="action-num">${i + 1}</span>
+          <div class="action-content">
+            <div class="action-title">${f.title}</div>
+            <div class="action-desc">${f.summary || ""}</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
+  }
+
+  if (otherFindings.length > 0) {
+    html += `<div class="action-group">
+      <div class="action-group-title">권장 개선 사항</div>
+      ${otherFindings.slice(0, 5).map((f, i) => `
+        <div class="action-item">
+          <span class="action-num">${urgentFindings.length + i + 1}</span>
+          <div class="action-content">
+            <div class="action-title">${f.title}</div>
+            <div class="action-desc">${f.summary || ""}</div>
+          </div>
+        </div>
+      `).join("")}
+    </div>`;
+  }
+
+  elements.actionsList.innerHTML = html;
 }
 
-function renderFindingFilters(findings) {
-  const counts = {
-    all: findings.length,
-    urgent: findings.filter((finding) => finding.severity === "critical" || finding.severity === "high").length,
-    medium: findings.filter((finding) => finding.severity === "medium").length,
-    low: findings.filter((finding) => finding.severity === "low").length
-  };
+function renderFindingFilters() {
+  if (!elements.findingsFilters) return;
 
-  findingFilters.innerHTML = FINDING_FILTERS.map((filter) => {
-    const activeClasses = filter.id === activeFindingFilter
-      ? "bg-orange-500 text-white border-orange-500"
-      : "bg-orange-50 text-slate-700 border-orange-200 hover:bg-orange-100";
+  elements.findingsFilters.innerHTML = FINDING_FILTERS.map(filter => `
+    <button type="button" class="filter-btn ${filter.id === currentFilter ? "active" : ""}" data-filter="${filter.id}">
+      ${filter.label}
+    </button>
+  `).join("");
 
-    return `
-      <button
-        type="button"
-        data-finding-filter="${escapeHtml(filter.id)}"
-        class="rounded-full border px-4 py-2 text-sm font-semibold transition ${activeClasses}"
-      >
-        ${escapeHtml(filter.label)} (${escapeHtml(String(counts[filter.id] || 0))})
-      </button>
-    `;
-  }).join("");
-
-  findingFilters.querySelectorAll("[data-finding-filter]").forEach((button) => {
-    button.addEventListener("click", () => {
-      activeFindingFilter = button.dataset.findingFilter || "all";
-      renderFindingFilters(findings);
-      renderFindings(findings);
+  elements.findingsFilters.querySelectorAll(".filter-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      currentFilter = btn.dataset.filter;
+      renderFindingFilters();
+      renderFindings(currentResult?.findings || []);
     });
   });
 }
 
 function renderFindings(findings) {
-  const filteredFindings = findings.filter((finding) => matchesFindingFilter(finding, activeFindingFilter));
+  if (!elements.findingsList) return;
 
-  if (!filteredFindings.length) {
-    findingsList.innerHTML = `
-      <article class="rounded-2xl border border-orange-100 bg-orange-50/50 p-5">
-        <div class="flex items-center justify-between gap-4">
-          <h4 class="text-lg font-semibold text-slate-900">이 필터에 해당하는 항목이 없습니다</h4>
-          <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${severityClass("low")}">empty</span>
-        </div>
-        <p class="mt-3 text-sm leading-7 text-slate-500">다른 필터를 선택해서 전체 결과를 다시 확인해 보세요.</p>
-      </article>
-    `;
+  if (!findings || !findings.length) {
+    elements.findingsList.innerHTML = `<div class="empty-state-inline">발견된 문제가 없습니다.</div>`;
     return;
   }
 
-  findingsList.innerHTML = filteredFindings.map((finding) => {
-    const remediation = finding.remediation;
-    const actions = remediation?.actions?.length
-      ? `<ul class="mt-3 list-disc space-y-2 pl-5 text-sm leading-7 text-slate-500">${remediation.actions.map((action) => `<li>${escapeHtml(action)}</li>`).join("")}</ul>`
-      : "";
-    const snippets = remediation?.snippets?.length
-      ? `<div class="mt-4 grid gap-3">${remediation.snippets.map((snippet) => `
-          <div class="rounded-2xl border border-gray-800 bg-gray-900 p-4 text-gray-100">
-            <strong class="block text-sm font-semibold text-white">${escapeHtml(snippet.label)}</strong>
-            <pre class="mt-3 overflow-auto text-sm leading-7 text-gray-100">${escapeHtml(snippet.code)}</pre>
-          </div>
-        `).join("")}</div>`
-      : "";
-    const references = remediation?.references?.length
-      ? `<div class="mt-4 flex flex-wrap gap-2">${remediation.references.map((ref) => `
-          <a
-            href="${escapeHtml(ref.href)}"
-            target="_blank"
-            rel="noreferrer"
-            class="rounded-full border border-orange-200 bg-orange-50 px-3 py-1.5 text-sm font-semibold text-orange-700 transition hover:bg-orange-100"
-          >${escapeHtml(ref.label)}</a>
-        `).join("")}</div>`
-      : "";
+  const filtered = currentFilter === "all"
+    ? findings
+    : findings.filter(f => f.severity === currentFilter);
+
+  if (!filtered.length) {
+    elements.findingsList.innerHTML = `<div class="empty-state-inline">해당 필터에 맞는 항목이 없습니다.</div>`;
+    return;
+  }
+
+  elements.findingsList.innerHTML = filtered.map(finding => `
+    <div class="finding-card ${finding.severity}">
+      <div class="finding-header">
+        <span class="finding-title">${finding.title}</span>
+        <span class="finding-badge ${finding.severity}">${severityLabels[finding.severity] || finding.severity}</span>
+      </div>
+      <div class="finding-desc">${finding.summary || ""}</div>
+      ${finding.evidence ? `<div class="finding-evidence">${finding.evidence}</div>` : ""}
+    </div>
+  `).join("");
+}
+
+function renderChecks(checks) {
+  if (!elements.checksGrid || !checks || !checks.length) return;
+
+  elements.checksGrid.innerHTML = checks.map(check => {
+    const statusClass = check.status === "pass" ? "pass" : check.status === "warn" ? "warn" : check.status === "fail" ? "fail" : "na";
+    const statusIcon = check.status === "pass" ? "✓" : check.status === "warn" ? "!" : check.status === "fail" ? "✗" : "-";
 
     return `
-      <article class="rounded-2xl border border-orange-100 bg-orange-50/40 p-5">
-        <div class="flex items-start justify-between gap-4">
-          <h4 class="text-xl font-semibold tracking-tight text-slate-900">${escapeHtml(finding.title)}</h4>
-          <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${severityClass(finding.severity)}">${escapeHtml(finding.severity)}</span>
+      <div class="check-card ${statusClass}">
+        <div class="check-status ${statusClass}">${statusIcon}</div>
+        <div class="check-info">
+          <div class="check-label">${check.label}</div>
+          <div class="check-detail">${check.detail || ""}</div>
         </div>
-        <p class="mt-3 text-sm leading-7 text-slate-600">${escapeHtml(finding.summary)}</p>
-        <p class="mt-3 text-sm leading-7 text-slate-500"><strong class="font-semibold text-slate-700">Evidence:</strong> ${escapeHtml(finding.evidence || "n/a")}</p>
-        ${remediation ? `
-          <div class="mt-4 border-t border-orange-100 pt-4">
-            <strong class="block text-sm font-semibold text-slate-900">${escapeHtml(remediation.title)}</strong>
-            <p class="mt-2 text-sm leading-7 text-slate-500">${escapeHtml(remediation.whyItMatters)}</p>
-            ${actions}
-            ${snippets}
-            ${references}
-          </div>
-        ` : ""}
-      </article>
+      </div>
     `;
   }).join("");
 }
 
-function renderChecks(checks) {
-  checksGrid.innerHTML = checks.map((check) => `
-    <article class="rounded-2xl border border-orange-100 bg-orange-50/40 p-5">
-      <div class="flex items-center justify-between gap-3">
-        <strong class="text-base font-semibold text-slate-900">${escapeHtml(check.label)}</strong>
-        <span class="inline-flex rounded-full px-3 py-1 text-xs font-semibold ${statusClass(check.status)}">${escapeHtml(check.status)}</span>
-      </div>
-      <p class="mt-3 text-sm leading-7 text-slate-500">${escapeHtml(check.detail)}</p>
-    </article>
-  `).join("");
-}
+function renderRedirects(chain) {
+  if (!elements.redirectTimeline) return;
 
-function renderTimeline(redirectChain) {
-  redirectTimeline.innerHTML = redirectChain.map((step, index) => `
-    <article class="rounded-2xl border border-orange-100 bg-orange-50/50 p-4">
-      <small class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Hop ${index + 1} · ${escapeHtml(String(step.statusCode))}</small>
-      <code class="mt-3 block break-all text-sm font-medium text-slate-800">${escapeHtml(step.url)}</code>
-      ${step.location ? `<code class="mt-2 block break-all text-sm text-slate-500">→ ${escapeHtml(step.location)}</code>` : ""}
-    </article>
+  if (!chain || !chain.length) {
+    elements.redirectTimeline.innerHTML = `<div class="empty-state-inline">리다이렉트가 없습니다.</div>`;
+    return;
+  }
+
+  elements.redirectTimeline.innerHTML = chain.map((item, i) => `
+    <div class="redirect-item">
+      <div class="redirect-num">${i + 1}</div>
+      <div class="redirect-info">
+        <div class="redirect-url">${item.url}</div>
+        <div class="redirect-status">${item.statusCode || ""} ${item.location ? `→ ${item.location}` : ""}</div>
+      </div>
+    </div>
   `).join("");
 }
 
 function renderHeaders(headers) {
-  headersBlock.textContent = Object.entries(headers)
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join("; ") : value}`)
-    .join("\n");
+  if (!elements.headersBlock) return;
+
+  if (!headers || !Object.keys(headers).length) {
+    elements.headersBlock.innerHTML = `<div class="empty-state-inline">헤더 정보가 없습니다.</div>`;
+    return;
+  }
+
+  // Security-relevant headers first
+  const securityHeaders = ["strict-transport-security", "content-security-policy", "x-frame-options", "x-content-type-options", "referrer-policy", "permissions-policy"];
+  const sorted = Object.entries(headers).sort((a, b) => {
+    const aIdx = securityHeaders.indexOf(a[0].toLowerCase());
+    const bIdx = securityHeaders.indexOf(b[0].toLowerCase());
+    if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+    if (aIdx !== -1) return -1;
+    if (bIdx !== -1) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+
+  elements.headersBlock.innerHTML = sorted.slice(0, 20).map(([name, value]) => `
+    <div class="header-item">
+      <div class="header-name">${name}</div>
+      <div class="header-value">${Array.isArray(value) ? value.join(", ") : value}</div>
+    </div>
+  `).join("");
 }
 
-function renderTls(tls) {
+function renderTLS(tls) {
+  if (!elements.tlsCard) return;
+
   if (!tls) {
-    tlsCard.innerHTML = `
-      <h4 class="text-lg font-semibold text-slate-900">TLS</h4>
-      <p class="mt-2 text-sm leading-7 text-slate-500">HTTPS가 감지되지 않았거나 TLS 정보를 읽을 수 없었습니다.</p>
-    `;
+    elements.tlsCard.innerHTML = `<div class="empty-state-inline">TLS 정보가 없습니다.</div>`;
     return;
   }
 
-  tlsCard.innerHTML = `
-    <h4 class="text-lg font-semibold text-slate-900">TLS</h4>
-    <dl class="mt-4 grid grid-cols-[120px_1fr] gap-x-4 gap-y-3 text-sm">
-      <dt class="font-semibold text-slate-700">Protocol</dt><dd class="break-all text-slate-500">${escapeHtml(tls.protocol || "unknown")}</dd>
-      <dt class="font-semibold text-slate-700">Cipher</dt><dd class="break-all text-slate-500">${escapeHtml(tls.cipher || "unknown")}</dd>
-      <dt class="font-semibold text-slate-700">Authorized</dt><dd class="break-all text-slate-500">${escapeHtml(String(Boolean(tls.authorized)))}</dd>
-      <dt class="font-semibold text-slate-700">Error</dt><dd class="break-all text-slate-500">${escapeHtml(tls.authorizationError || "none")}</dd>
-      <dt class="font-semibold text-slate-700">Subject</dt><dd class="break-all text-slate-500">${escapeHtml(tls.subject || "unknown")}</dd>
-      <dt class="font-semibold text-slate-700">Issuer</dt><dd class="break-all text-slate-500">${escapeHtml(tls.issuer || "unknown")}</dd>
-      <dt class="font-semibold text-slate-700">Valid from</dt><dd class="break-all text-slate-500">${escapeHtml(tls.validFrom || "unknown")}</dd>
-      <dt class="font-semibold text-slate-700">Valid to</dt><dd class="break-all text-slate-500">${escapeHtml(tls.validTo || "unknown")}</dd>
-    </dl>
-  `;
-}
-
-function renderCookies(cookies) {
-  if (!cookies.length) {
-    cookiesCard.innerHTML = `
-      <h4 class="text-lg font-semibold text-slate-900">Set-Cookie</h4>
-      <p class="mt-2 text-sm leading-7 text-slate-500">이번 응답에서는 Set-Cookie 헤더가 관찰되지 않았습니다.</p>
-    `;
-    return;
-  }
-
-  cookiesCard.innerHTML = `
-    <h4 class="text-lg font-semibold text-slate-900">Set-Cookie</h4>
-    <div class="mt-4 grid gap-3">
-      ${cookies.map((cookie) => `
-        <article class="rounded-2xl border border-orange-100 bg-white p-4">
-          <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div>
-              <div class="font-semibold text-slate-900">${escapeHtml(cookie.name || "(unnamed)")}</div>
-              <small class="mt-1 block text-slate-500">${escapeHtml(cookie.valuePreview || "(value hidden)")}</small>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <span class="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-slate-700">Secure: ${cookie.secure ? "yes" : "no"}</span>
-              <span class="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-slate-700">HttpOnly: ${cookie.httpOnly ? "yes" : "no"}</span>
-              <span class="rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-slate-700">SameSite: ${escapeHtml(cookie.sameSite || "missing")}</span>
-            </div>
-          </div>
-        </article>
-      `).join("")}
+  elements.tlsCard.innerHTML = `
+    <div class="tls-grid">
+      <div class="tls-item">
+        <div class="tls-label">프로토콜</div>
+        <div class="tls-value">${tls.protocol || "-"}</div>
+      </div>
+      <div class="tls-item">
+        <div class="tls-label">암호화</div>
+        <div class="tls-value">${tls.cipher || "-"}</div>
+      </div>
+      <div class="tls-item">
+        <div class="tls-label">발급자</div>
+        <div class="tls-value">${tls.issuer || "-"}</div>
+      </div>
+      <div class="tls-item">
+        <div class="tls-label">대상</div>
+        <div class="tls-value">${tls.subject || "-"}</div>
+      </div>
+      <div class="tls-item">
+        <div class="tls-label">유효 기간</div>
+        <div class="tls-value">${tls.validFrom ? new Date(tls.validFrom).toLocaleDateString("ko-KR") : "-"} ~ ${tls.validTo ? new Date(tls.validTo).toLocaleDateString("ko-KR") : "-"}</div>
+      </div>
+      <div class="tls-item">
+        <div class="tls-label">상태</div>
+        <div class="tls-value ${tls.authorized ? "text-success" : "text-danger"}">${tls.authorized ? "유효" : (tls.authorizationError || "검증 실패")}</div>
+      </div>
     </div>
   `;
 }
 
-function renderLimitations(limitations) {
-  limitationsList.innerHTML = limitations.map((item) => `
-    <article class="rounded-2xl border border-orange-100 bg-orange-50/50 p-4 text-sm leading-7 text-slate-500">${escapeHtml(item)}</article>
-  `).join("");
-}
+function renderCookies(cookies) {
+  if (!elements.cookiesCard) return;
 
-function matchesFindingFilter(finding, filterId) {
-  switch (filterId) {
-    case "urgent":
-      return finding.severity === "critical" || finding.severity === "high";
-    case "medium":
-      return finding.severity === "medium";
-    case "low":
-      return finding.severity === "low";
-    default:
-      return true;
-  }
-}
-
-function renderHistory() {
-  const history = readHistory();
-  recentPanel?.classList.toggle("hidden", history.length === 0);
-
-  if (!history.length) {
-    recentList.innerHTML = "";
+  if (!cookies || !cookies.length) {
+    elements.cookiesCard.innerHTML = `<div class="empty-state-inline">쿠키가 없습니다.</div>`;
     return;
   }
 
-  recentList.innerHTML = history.map((item) => `
-    <article class="rounded-2xl border border-orange-100 bg-orange-50/50 p-4">
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <code class="break-all text-sm font-medium text-slate-800">${escapeHtml(item)}</code>
-        <button type="button" data-recent="${escapeHtml(item)}" class="rounded-full border border-orange-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-orange-100">다시 검사</button>
+  elements.cookiesCard.innerHTML = cookies.map(cookie => {
+    const flags = [];
+    flags.push({ text: "Secure", ok: cookie.secure });
+    flags.push({ text: "HttpOnly", ok: cookie.httpOnly });
+    flags.push({ text: `SameSite=${cookie.sameSite || "없음"}`, ok: !!cookie.sameSite });
+
+    return `
+      <div class="cookie-item">
+        <div class="cookie-name">${cookie.name}</div>
+        <div class="cookie-flags">
+          ${flags.map(f => `<span class="cookie-flag ${f.ok ? "ok" : "bad"}">${f.text}</span>`).join("")}
+        </div>
       </div>
-    </article>
-  `).join("");
-
-  recentList.querySelectorAll("[data-recent]").forEach((button) => {
-    button.addEventListener("click", () => {
-      urlInput.value = button.dataset.recent || "";
-      urlInput.focus();
-    });
-  });
+    `;
+  }).join("");
 }
 
-function saveRecentScan(url) {
-  const list = readHistory().filter((item) => item !== url);
-  list.unshift(url);
-  window.localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, MAX_HISTORY_ITEMS)));
-  renderHistory();
-}
-
-function readHistory() {
+// History
+function getHistory() {
   try {
-    const raw = window.localStorage.getItem(HISTORY_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string") : [];
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
   } catch {
     return [];
   }
 }
 
-function flashButton(button, temporaryLabel, originalLabel) {
-  button.textContent = temporaryLabel;
-  window.setTimeout(() => {
-    button.textContent = originalLabel;
-  }, 1200);
+function saveToHistory(data) {
+  const history = getHistory();
+  const target = data.target || {};
+  const summary = data.summary || {};
+
+  const entry = {
+    id: Date.now(),
+    url: target.finalUrl || target.normalized || "",
+    hostname: target.hostname || "",
+    score: summary.score ?? 0,
+    grade: summary.grade || "-",
+    riskLevel: summary.riskLevel || "-",
+    timestamp: new Date().toISOString(),
+    data
+  };
+
+  history.unshift(entry);
+  if (history.length > MAX_HISTORY_ITEMS) history.pop();
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
 }
 
-function buildSummaryText(report) {
-  const topFindings = report.findings.slice(0, 3).map((finding) => `- ${finding.title}`).join("\n") || "- 없음";
-  return [
-    `[SiteGuard] ${report.target.finalUrl || report.target.normalized}`,
-    `score: ${report.summary.score} (${report.summary.grade})`,
-    `risk: ${report.summary.riskLevel}`,
-    `headline: ${report.summary.headline}`,
-    "",
-    "top findings:",
-    topFindings
-  ].join("\n");
+function renderHistory() {
+  const history = getHistory();
+
+  if (!history.length) {
+    elements.historyGrid.innerHTML = "";
+    elements.historyEmpty.classList.remove("hidden");
+    return;
+  }
+
+  elements.historyEmpty.classList.add("hidden");
+  elements.historyGrid.innerHTML = history.map(entry => {
+    const gradeClass = getGradeClass(entry.grade);
+    const date = new Date(entry.timestamp).toLocaleString("ko-KR", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
+    });
+
+    return `
+      <div class="history-card" data-id="${entry.id}">
+        <div class="history-score ${gradeClass}">${entry.score}</div>
+        <div class="history-info">
+          <div class="history-url">${entry.hostname || new URL(entry.url).hostname}</div>
+          <div class="history-meta">${date} • 등급 ${entry.grade}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  elements.historyGrid.querySelectorAll(".history-card").forEach(card => {
+    card.addEventListener("click", () => {
+      const entry = history.find(h => h.id === parseInt(card.dataset.id));
+      if (entry) {
+        currentResult = entry.data;
+        renderResults(entry.data);
+        showResults();
+      }
+    });
+  });
 }
 
-function buildMarkdown(report) {
-  const checks = report.checks.map((check) => `- ${check.label}: ${check.status} (${check.detail})`).join("\n");
-  const findings = report.findings.length
-    ? report.findings.map((finding) => [
-        `## ${finding.title}`,
-        `- Severity: ${finding.severity}`,
-        `- Summary: ${finding.summary}`,
-        `- Evidence: ${finding.evidence || "n/a"}`
-      ].join("\n")).join("\n\n")
-    : "문제 없음";
-
-  return [
-    "# SiteGuard Report",
-    "",
-    `- URL: ${report.target.finalUrl || report.target.normalized}`,
-    `- Scanned at: ${report.target.scannedAt}`,
-    `- Score: ${report.summary.score} (${report.summary.grade})`,
-    `- Risk: ${report.summary.riskLevel}`,
-    `- Cached: ${report.meta?.cached ? "yes" : "no"}`,
-    "",
-    "## Headline",
-    report.summary.headline,
-    "",
-    "## Findings",
-    findings,
-    "",
-    "## Checks",
-    checks,
-    "",
-    "## Limitations",
-    report.limitations.map((item) => `- ${item}`).join("\n")
-  ].join("\n");
+function clearHistory() {
+  if (confirm("모든 점검 기록을 삭제하시겠습니까?")) {
+    localStorage.removeItem(STORAGE_KEY);
+    renderHistory();
+  }
 }
 
-function buildFilename(report, extension) {
-  const hostname = new URL(report.target.finalUrl || report.target.normalized).hostname.replaceAll(".", "-");
-  return `siteguard-${hostname}.${extension}`;
+// Export functions
+function copySummary() {
+  if (!currentResult) return;
+  const target = currentResult.target || {};
+  const summary = currentResult.summary || {};
+
+  const text = `[SiteGuard 보안 점검 결과]
+URL: ${target.finalUrl || ""}
+점수: ${summary.score ?? 0}/100 (등급 ${summary.grade || "-"})
+위험도: ${summary.riskLevel || "-"}
+${summary.headline || ""}`;
+
+  navigator.clipboard.writeText(text).then(() => {
+    showToast("요약이 복사되었습니다");
+  });
 }
 
-function downloadFile(filename, content, mimeType) {
-  const blob = new Blob([content], { type: mimeType });
+function copyJson() {
+  if (!currentResult) return;
+  navigator.clipboard.writeText(JSON.stringify(currentResult, null, 2)).then(() => {
+    showToast("JSON이 복사되었습니다");
+  });
+}
+
+function downloadJson() {
+  if (!currentResult) return;
+  const target = currentResult.target || {};
+  const blob = new Blob([JSON.stringify(currentResult, null, 2)], { type: "application/json" });
+  downloadBlob(blob, `siteguard-${target.hostname || "result"}-${Date.now()}.json`);
+}
+
+function downloadMarkdown() {
+  if (!currentResult) return;
+  const md = generateMarkdown(currentResult);
+  const target = currentResult.target || {};
+  const blob = new Blob([md], { type: "text/markdown" });
+  downloadBlob(blob, `siteguard-${target.hostname || "result"}-${Date.now()}.md`);
+}
+
+function generateMarkdown(data) {
+  const target = data.target || {};
+  const summary = data.summary || {};
+  const findings = data.findings || [];
+
+  let md = `# SiteGuard 보안 점검 결과\n\n`;
+  md += `- **URL**: ${target.finalUrl || ""}\n`;
+  md += `- **점수**: ${summary.score ?? 0}/100 (등급 ${summary.grade || "-"})\n`;
+  md += `- **위험도**: ${summary.riskLevel || "-"}\n`;
+  md += `- **점검 일시**: ${new Date(target.scannedAt || Date.now()).toLocaleString("ko-KR")}\n\n`;
+
+  if (summary.headline) {
+    md += `## 요약\n\n${summary.headline}\n\n`;
+  }
+
+  if (findings.length) {
+    md += `## 발견 항목\n\n`;
+    findings.forEach(f => {
+      md += `- **[${severityLabels[f.severity]}]** ${f.title}: ${f.summary || ""}\n`;
+    });
+    md += "\n";
+  }
+
+  return md;
+}
+
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
   URL.revokeObjectURL(url);
 }
 
-function severityClass(severity) {
-  return severityStyles[severity] || severityStyles.low;
-}
+function showToast(message) {
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.textContent = message;
+  document.body.appendChild(toast);
 
-function statusClass(status) {
-  return statusStyles[status] || statusStyles.na;
-}
-
-function riskClass(risk) {
-  return riskStyles[risk] || riskStyles.Moderate;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  setTimeout(() => {
+    toast.classList.add("hide");
+    setTimeout(() => toast.remove(), 300);
+  }, 2000);
 }
