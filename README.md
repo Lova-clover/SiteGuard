@@ -1,121 +1,148 @@
-# SiteGuard
+﻿# SiteGuard
 
-공개 URL 하나로 웹사이트의 기본 보안 구성을 점검하고, 점수와 증거, 수정 가이드를 함께 제공하는 패시브 웹 보안 스캐너입니다.
+<p align="center">
+  <img src="./public/logo-duck.png" alt="SiteGuard logo" width="120" />
+</p>
 
-SiteGuard는 “공격하는 도구”가 아니라 “배포 전에 놓치기 쉬운 보안 기본기를 빠르게 점검하는 도구”를 목표로 만들었습니다.  
-HTTPS, TLS, 보안 헤더, 쿠키 속성, 리다이렉트, 혼합 콘텐츠 같은 항목을 읽기 전용으로 분석하고, 결과를 사람이 바로 이해하고 고칠 수 있는 형태로 정리해 보여줍니다.
+<p align="center">
+  공개 URL 기준으로 웹사이트의 기본 보안 상태를 빠르게 점검하는 패시브 스캐너
+</p>
 
-## 왜 만들었나
+<p align="center">
+  <a href="./README.en.md">English README</a>
+</p>
 
-AI 기반 개발과 바이브 코딩이 빨라질수록, 기능은 빠르게 나오지만 보안 기본 설정은 자주 빠집니다.
+## 소개
 
-예를 들면 이런 문제들입니다.
+SiteGuard는 공개된 `http://` 또는 `https://` URL을 기준으로, 외부에서 확인 가능한 기본 보안 상태를 빠르게 점검하는 도구입니다.
 
-- HTTP에서 HTTPS로 강제되지 않는 진입점
-- 빠져 있는 HSTS, CSP, Referrer-Policy
-- `Secure`, `HttpOnly`, `SameSite`가 없는 세션 쿠키
-- 기술 스택 정보가 그대로 노출되는 응답 헤더
-- HTTPS 페이지 안에 남아 있는 HTTP 리소스 참조
+이 프로젝트는 침투 테스트 도구가 아니라, 배포 전이나 운영 중에 한 번쯤 점검해야 할 **기본 보안 구성**을 빠르게 읽어주는 1차 점검 도구에 가깝습니다.
 
-이 프로젝트는 “전문 보안 솔루션을 대체”하려는 것이 아니라, 배포 직전 누구나 한 번 돌려볼 수 있는 공개 보안 상태 점검기를 만드는 데 초점을 두고 있습니다.
+예를 들면 이런 질문에 답하는 데 적합합니다.
 
-## 핵심 기능
+- HTTPS는 제대로 지원되는가?
+- HTTP 진입점은 HTTPS로 강제되는가?
+- TLS 인증서는 정상인가?
+- CSP, HSTS, Referrer-Policy 같은 보안 헤더가 빠져 있지는 않은가?
+- 쿠키에 `Secure`, `HttpOnly`, `SameSite` 같은 속성이 적절히 붙어 있는가?
+- 공개 페이지에 mixed content 같은 직접적인 브라우저 위험 신호가 보이는가?
 
-- 공개 URL 입력 한 번으로 보안 상태를 분석
-- 보안 점수와 등급, 위험도 요약 제공
-- 리다이렉트 체인, 응답 헤더, TLS 정보, 쿠키 플래그 등 증거 기반 리포트 제공
-- 우선순위가 높은 문제부터 정렬된 Findings 제공
-- 각 문제에 대해 왜 위험한지, 무엇을 고쳐야 하는지, 예시 설정 코드까지 제공
-- JSON / Markdown 내보내기 지원
-- 최근 검사 URL 기록 및 재실행 지원
+## 스크린샷
 
-## 어떤 항목을 점검하나
+### 메인 화면
 
-SiteGuard는 현재 다음 범위를 중심으로 점검합니다.
+<img src="./docs/home.png" alt="SiteGuard 메인 화면" />
+
+URL을 입력해 바로 공개 보안 상태를 점검할 수 있는 시작 화면입니다.
+
+### 결과 화면
+
+<img src="./docs/result.png" alt="SiteGuard 결과 화면" />
+
+점수, 현재 상태, 우선순위, 문제 목록, 세부 진단까지 한 화면에서 확인할 수 있습니다.
+
+## 이 프로젝트가 다루는 범위
+
+SiteGuard는 **공개 URL 기준의 패시브 외부 점검**에 집중합니다.
+
+즉, 다음과 같은 항목은 잘 봅니다.
 
 - HTTPS 지원 여부
 - HTTP -> HTTPS 리다이렉트
-- TLS 인증서 상태
-- HSTS
-- Content-Security-Policy
+- TLS 인증서 유효성 및 만료일
+- `Strict-Transport-Security`
+- `Content-Security-Policy`
 - 클릭재킹 방어 (`X-Frame-Options`, `frame-ancestors`)
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy`
 - `Permissions-Policy`
 - 쿠키 보안 속성 (`Secure`, `HttpOnly`, `SameSite`)
-- 명백한 CORS 오설정
+- 응답에서 보이는 CORS 설정
 - 기술 스택 노출 헤더
-- 혼합 콘텐츠 신호
-- 안전하지 않은 로그인 폼 전송 신호
+- mixed content 신호
+- 로그인 폼 전송 안전성 힌트
+- `security.txt`
 
-## 이 도구가 하지 않는 것
+반대로, 아래 범위는 의도적으로 다루지 않습니다.
 
-이 프로젝트는 의도적으로 패시브 검사만 수행합니다.
+- 로그인 이후 기능 점검
+- SQL Injection, Stored XSS, IDOR 같은 적극적 취약점 검증
+- 인증/인가 우회 테스트
+- 비즈니스 로직 취약점 분석
+- 내부망, 사설 IP, `localhost` 대상 점검
 
-- 브루트포스, 퍼징, 공격 페이로드 전송을 하지 않습니다.
-- SQL Injection, XSS, IDOR, 권한 우회 같은 취약점을 “확정”하지 않습니다.
-- 로그인 후 페이지나 내부망 자산을 검사하지 않습니다.
-- `localhost`, 사설 IP, 내부망 스타일 호스트는 차단합니다.
+즉 SiteGuard는 **모든 보안 문제를 진단하는 도구**가 아니라, **밖에서 바로 보이는 기본 보안 상태를 빠르게 확인하는 도구**입니다.
 
-즉, SiteGuard는 “공개적으로 보이는 보안 상태를 빠르게 점검하는 1차 스캐너”입니다.  
-실제 서비스 보안 검증에는 인증된 테스트, 수동 리뷰, 권한 모델 검토가 반드시 추가로 필요합니다.
+## 핵심 기능
 
-## 제품 관점에서의 특징
+- 공개 URL 하나로 빠르게 실행하는 패시브 보안 점검
+- 증거 기반 결과 화면
+- 문제 요약, 우선순위, 권장 조치 제공
+- `direct / hardening / maturity` 기준의 위험 분류
+- 최근 점검 기록 저장
+- 선택적으로 사용할 수 있는 관리자용 `/admin` 대시보드
+- Redis 기반 방문자 수 / 실행 수 집계 지원
+- Vercel, Render, Docker, 일반 Node.js 환경 배포 지원
 
-기존 보안 도구가 차갑고 기술적인 콘솔에 가까웠다면, SiteGuard는 다음 경험을 목표로 설계했습니다.
+## 아키텍처
 
-- 따뜻한 오렌지/베이지 톤의 SaaS 스타일 UI
-- 결과를 한눈에 읽는 대시보드형 상단 영역
-- 넓은 화면에서 잘 보이도록 구성한 분석 워크스페이스
-- “문제가 있다”에서 끝나지 않고 “바로 어떻게 고칠지”까지 이어지는 UX
+아래 구조는 SiteGuard의 핵심 흐름만 단순하게 정리한 것입니다.
 
-## 기술 스택
+```mermaid
+flowchart LR
+    U["사용자 브라우저"] -->|"URL 입력 / 결과 조회"| W["SiteGuard Web UI"]
+    W -->|"POST /api/scan"| API["SiteGuard API"]
+    API --> C["TTL Cache"]
+    API --> G["Rate Limit / Concurrency Guard"]
+    G --> S["Passive Scanner"]
+    S --> DNS["Public DNS 검증"]
+    S --> T["대상 웹사이트"]
+    T --> S
+    S --> API
+    API --> W
 
-### Backend
-
-- Node.js
-- 내장 `http`, `https`, `dns`, `net` 기반 패시브 스캐너
-- 메모리 기반 rate limit / concurrency guard / TTL cache
-
-### Frontend
-
-- Tailwind CSS
-- 바닐라 JavaScript
-- 단일 페이지 대시보드 UI
-
-### Infra / Delivery
-
-- Docker
-- Render 배포 설정 포함
-
-## 프로젝트 구조
-
-```text
-.
-├─ public/
-│  ├─ app.js
-│  ├─ favicon.svg
-│  ├─ index.html
-│  ├─ robots.txt
-│  └─ tailwind.css
-├─ src/
-│  ├─ remediation.js
-│  ├─ runtime-guards.js
-│  ├─ scanner.js
-│  └─ tailwind.css
-├─ test/
-│  ├─ runtime-guards.test.js
-│  └─ server.test.js
-├─ Dockerfile
-├─ render.yaml
-├─ server.js
-└─ package.json
+    W -. "선택 사항" .-> M["방문 / 실행 메트릭"]
+    M -. "옵션" .-> R["Redis"]
 ```
 
-## 로컬 실행
+핵심만 보면 다음과 같습니다.
+
+- 사용자는 Web UI에서 URL을 입력합니다.
+- API는 캐시, 레이트리밋, 동시 실행 제한을 먼저 거칩니다.
+- 스캐너는 공개 대상만 점검하도록 DNS와 네트워크 안전장치를 적용합니다.
+- 결과는 요약, 근거, 권장 조치 형태로 다시 UI에 전달됩니다.
+- 방문 수와 실행 수 집계는 선택적으로 Redis에 저장할 수 있습니다.
+
+## 리스크 모델 특징
+
+SiteGuard는 모든 문제를 같은 온도로 다루지 않도록 설계되어 있습니다.
+
+- `direct`: 실제 브라우저나 사용자에게 직접적인 위험으로 이어질 수 있는 항목
+- `hardening`: 방어선을 더 강화하기 위해 필요한 항목
+- `maturity`: 운영 성숙도와 신뢰도에 가까운 항목
+
+이 구분 덕분에:
+
+- 만료된 TLS 인증서나 mixed content 같은 직접 위험은 강하게 반영하고
+- CSP, HSTS 같은 하드닝 항목은 과도하게 벌점하지 않으며
+- `security.txt` 같은 운영 신호는 낮은 우선순위로 다룰 수 있습니다.
+
+## 빠른 시작
+
+### 요구 사항
+
+- Node.js 20+
+- npm
+
+### 설치
 
 ```bash
 npm install
+```
+
+### 개발 실행
+
+```bash
 npm run build
 npm run dev
 ```
@@ -126,11 +153,177 @@ npm run dev
 http://localhost:3000
 ```
 
-프로덕션 방식으로 바로 실행하려면:
+### 프로덕션 방식 실행
 
 ```bash
 npm start
 ```
+
+## 사용 가능한 스크립트
+
+| 스크립트 | 설명 |
+| --- | --- |
+| `npm run dev` | 로컬 서버 실행 (`node --watch`) |
+| `npm run build` | Tailwind CSS 빌드 |
+| `npm run build:css` | CSS 한 번만 빌드 |
+| `npm run dev:css` | CSS 변경 감시 |
+| `npm test` | 테스트 실행 |
+| `npm start` | 프로덕션 서버 실행 |
+
+## API 엔드포인트
+
+| Method | Path | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/health` | 서버 상태 확인 |
+| `GET` | `/api/ready` | readiness 확인 |
+| `POST` | `/api/scan` | 보안 점검 실행 |
+| `POST` | `/api/metrics/visit` | 방문 집계 기록 |
+| `POST` | `/api/admin/login` | 관리자 로그인 |
+| `POST` | `/api/admin/logout` | 관리자 로그아웃 |
+| `GET` | `/api/admin/session` | 관리자 세션 상태 확인 |
+| `GET` | `/api/admin/metrics` | 관리자 통계 조회 |
+
+예시 요청:
+
+```bash
+curl -X POST http://localhost:3000/api/scan \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com"}'
+```
+
+## 환경 변수
+
+### 기본 서버 / 스캐너 설정
+
+| 변수명 | 설명 | 기본값 |
+| --- | --- | --- |
+| `PORT` | 서버 포트 | `3000` |
+| `SCAN_CACHE_TTL_MS` | 점검 결과 캐시 유지 시간 | `300000` |
+| `SCAN_CACHE_MAX_ENTRIES` | 캐시 최대 엔트리 수 | `300` |
+| `RATE_LIMIT_WINDOW_MS` | 레이트리밋 윈도우 | `60000` |
+| `RATE_LIMIT_MAX` | IP 기준 윈도우당 최대 점검 요청 수 | `10` |
+| `MAX_CONCURRENT_SCANS` | 동시에 실행 가능한 점검 수 | `4` |
+
+### 관리자 대시보드
+
+| 변수명 | 설명 | 기본값 |
+| --- | --- | --- |
+| `ADMIN_USERNAME` | 관리자 로그인 아이디 | 없음 |
+| `ADMIN_PASSWORD_HASH` | 권장 관리자 비밀번호 해시 | 없음 |
+| `ADMIN_PASSWORD` | 평문 비밀번호 대체값 | 없음 |
+| `ADMIN_SESSION_SECRET` | 관리자 세션 서명용 비밀키 | 없음 |
+| `ADMIN_SESSION_TTL_SEC` | 관리자 세션 유지 시간(초) | `1209600` |
+
+`ADMIN_PASSWORD_HASH` 사용을 권장합니다.
+
+비밀번호 해시 생성:
+
+```bash
+node --input-type=module -e "import { createPasswordHash } from './src/admin-auth.js'; console.log(createPasswordHash('YOUR_PASSWORD'))"
+```
+
+세션 시크릿 생성:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+### 통계 / 메트릭 설정
+
+| 변수명 | 설명 | 기본값 |
+| --- | --- | --- |
+| `SITEGUARD_METRICS_TIMEZONE` | 일별 집계 타임존 | `Asia/Seoul` |
+| `SITEGUARD_METRICS_TTL_SEC` | 일별 메트릭 키 TTL | `10368000` |
+| `SITEGUARD_RECENT_SCAN_LIMIT` | 최근 점검 로그 보관 수 | `20` |
+| `SITEGUARD_TOP_DOMAIN_LIMIT` | 상위 도메인 집계 수 | `5` |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL | 없음 |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST 토큰 | 없음 |
+| `KV_REST_API_URL` | Vercel KV 호환 URL fallback | 없음 |
+| `KV_REST_API_TOKEN` | Vercel KV 호환 토큰 fallback | 없음 |
+
+Redis가 설정되지 않으면 메트릭은 메모리 기반으로 동작합니다.
+
+- 로컬 개발에는 충분합니다.
+- 서버리스 환경에서는 누적 통계가 정확하지 않을 수 있습니다.
+- 운영 환경에서는 Redis 사용을 권장합니다.
+
+## 선택 기능: 관리자 대시보드
+
+SiteGuard는 `/admin`에서 관리자 전용 통계를 제공합니다.
+
+확인 가능한 항목:
+
+- 누적 방문자 수
+- 페이지뷰
+- 점검 실행 수
+- 성공 / 실패 / 캐시 비율
+- 최근 7일 흐름
+- 많이 점검된 도메인
+- 최근 실행 로그
+
+운영 환경에서 안정적으로 사용하려면 아래 순서를 권장합니다.
+
+1. 관리자 인증 환경 변수 설정
+2. Redis 연결
+3. 재배포
+
+Vercel에서는 Storage / Marketplace에서 Upstash Redis를 연결하는 방식이 가장 간단합니다.
+
+## 배포
+
+### Vercel
+
+이 저장소는 `vercel.json`과 `api/` 서버리스 엔드포인트를 포함하고 있습니다.
+
+권장 설정:
+
+- Framework Preset: `Other`
+- Build Command: `npm run build`
+- Output Directory: `public`
+
+관리자 통계를 운영에 사용할 경우, 관리자 인증 변수와 Redis 연결을 함께 설정하는 편이 좋습니다.
+
+### Render
+
+`render.yaml` 예시가 포함되어 있습니다.
+
+### Docker
+
+```bash
+docker build -t siteguard .
+docker run -p 3000:3000 siteguard
+```
+
+## 프로젝트 구조
+
+```text
+.
+├─ api/                  # Vercel 서버리스 엔드포인트
+├─ public/               # 사용자 UI 및 관리자 대시보드 정적 파일
+├─ src/                  # 스캐너, 인증, 메트릭, 런타임 로직
+├─ test/                 # 테스트 코드
+├─ server.js             # 로컬 Node.js 서버 엔트리포인트
+├─ vercel.json           # Vercel 설정
+├─ render.yaml           # Render 배포 예시
+├─ Dockerfile            # Docker 이미지 빌드 파일
+└─ package.json
+```
+
+## 런타임 안전장치
+
+SiteGuard는 외부 URL에 요청을 보내는 도구이기 때문에, 기본적인 안전장치를 함께 갖추고 있습니다.
+
+- `localhost`, 사설 IP, 내부 대상 차단
+- DNS 검증 및 rebinding 완화
+- 검증된 주소에 대한 pinned lookup
+- 실제 연결된 소켓 주소 검증
+- 절대 타임아웃
+- 응답 바디 크기 제한
+- IP 기준 레이트리밋
+- 동시 실행 수 제한
+- TTL 캐시
+
+이 장치들은 SiteGuard를 더 안전하게 운영하기 위한 것이며, 완전한 보안 경계 자체를 대체하지는 않습니다.
 
 ## 테스트
 
@@ -138,60 +331,22 @@ npm start
 npm test
 ```
 
-현재 테스트는 다음을 검증합니다.
-
-- rate limiter 동작
-- TTL cache 동작
-- concurrency guard 동작
-- 프록시 환경에서의 클라이언트 IP / secure request 판별
-- `/api/health`
-- `/api/scan` 캐시 동작
-- 정적 루트 페이지 응답
-
-## 프론트엔드 빌드
-
-UI는 Tailwind CSS 기반으로 구성되어 있으며, 빌드 결과는 `public/tailwind.css`로 생성됩니다.
+CSS 빌드 확인:
 
 ```bash
 npm run build
 ```
 
-## 배포
+## 책임 있는 사용
 
-이 프로젝트는 단일 Node 서버와 정적 자산으로 구성되어 있어 Render, Railway, Fly.io 같은 환경에 쉽게 배포할 수 있습니다.
+권한이 있는 대상만 점검하세요.
 
-### Render
+SiteGuard는 패시브 스캐너이지만, 여전히 법률, 서비스 약관, 조직 정책을 준수하면서 사용해야 합니다.
 
-레포에 포함된 `render.yaml`을 사용하면 바로 배포 구성을 가져갈 수 있습니다.
+## 보안 제보
 
-### Docker
+SiteGuard 자체의 취약점을 발견했다면 공개 이슈 대신 [SECURITY.md](./SECURITY.md)를 먼저 확인해 주세요.
 
-레포에 포함된 `Dockerfile`로 이미지 빌드가 가능합니다.
+## 라이선스
 
-```bash
-docker build -t siteguard .
-docker run -p 3000:3000 siteguard
-```
-
-## 환경 변수
-
-| 이름 | 설명 | 기본값 |
-|---|---|---|
-| `PORT` | 서버 포트 | `3000` |
-| `MAX_CONCURRENT_SCANS` | 동시에 처리할 스캔 수 | `4` |
-| `RATE_LIMIT_MAX` | IP 기준 윈도우당 최대 요청 수 | `10` |
-| `RATE_LIMIT_WINDOW_MS` | 레이트리밋 윈도우 | `60000` |
-| `SCAN_CACHE_TTL_MS` | 결과 캐시 유지 시간 | `300000` |
-| `SCAN_CACHE_MAX_ENTRIES` | 캐시 최대 엔트리 수 | `300` |
-
-## 앞으로 확장할 수 있는 방향
-
-- 도메인 소유 검증 후 더 깊은 `Verified Scan`
-- 여러 URL을 한 화면에서 비교하는 비교 모드
-- 프레임워크별 수정 가이드 강화
-- CI에서 자동 보안 구성 점검 리포트 생성
-
-## 주의
-
-이 도구는 공개적으로 관찰 가능한 보안 상태를 빠르게 확인하는 데 최적화되어 있습니다.  
-실제 운영 환경에서는 반드시 인증된 보안 테스트, 권한 검토, 로그 분석, 수동 점검을 함께 진행해야 합니다.
+이 프로젝트는 [MIT License](./LICENSE)를 따릅니다.

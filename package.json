@@ -2,6 +2,7 @@
   "name": "siteguard-passive-scanner",
   "version": "1.0.0",
   "description": "Passive public web security posture scanner with evidence and remediation guidance.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "npm run build:css",
