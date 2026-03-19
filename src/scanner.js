@@ -1556,6 +1556,22 @@ function riskLevelForScore(score) {
   return "Critical";
 }
 
+function applyScoreGuardrails(baseScore, categoryCounts) {
+  if (categoryCounts.directCritical > 0) {
+    return Math.min(baseScore, 49);
+  }
+
+  if (categoryCounts.directHigh > 0) {
+    return Math.min(baseScore, 74);
+  }
+
+  if (categoryCounts.directMedium > 0) {
+    return Math.min(baseScore, 79);
+  }
+
+  return baseScore;
+}
+
 
 function buildSummary({ checks, findings, httpProbe, httpsProbe, score }) {
   const counts = {
@@ -1580,6 +1596,8 @@ function buildSummary({ checks, findings, httpProbe, httpsProbe, score }) {
     hardeningMedium: findings.filter((finding) => finding.category === "hardening" && finding.severity === "medium").length
   };
 
+  const adjustedScore = applyScoreGuardrails(score.value, categoryCounts);
+  const adjustedGrade = gradeForScore(adjustedScore);
   let riskLevel = score.riskLevel;
 
   if (categoryCounts.directCritical > 0) {
@@ -1597,8 +1615,8 @@ function buildSummary({ checks, findings, httpProbe, httpsProbe, score }) {
     : "공개적으로 확인 가능한 핵심 보안 항목은 대체로 잘 갖춰져 있습니다.";
 
   return {
-    score: score.value,
-    grade: score.grade,
+    score: adjustedScore,
+    grade: adjustedGrade,
     riskLevel,
     headline,
     counts,

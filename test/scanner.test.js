@@ -339,6 +339,7 @@ test("buildSummary keeps hardening-only gaps at moderate risk instead of escalat
   assert.equal(summary.counts.high, 0);
   assert.equal(summary.categoryCounts.direct, 0);
   assert.ok(summary.score >= 75);
+  assert.equal(summary.grade, "B");
 });
 
 test("buildSummary still escalates direct browser-facing issues", () => {
@@ -438,7 +439,111 @@ test("buildSummary still escalates direct browser-facing issues", () => {
   });
 
   assert.equal(summary.riskLevel, "High");
+  assert.equal(summary.grade, "C");
+  assert.equal(summary.score, 74);
   assert.ok(findings.some((finding) => finding.id === "mixed_content" && finding.category === "direct"));
+});
+
+test("buildSummary caps grade to F when direct critical issues are present", () => {
+  const finalResponse = {
+    headers: {},
+    tls: {
+      authorizationError: "CERT_HAS_EXPIRED"
+    }
+  };
+  const analysis = {
+    cookies: [],
+    csp: {
+      enabled: false,
+      weak: false
+    },
+    cors: {
+      configured: false,
+      permissive: false,
+      publicDocumentWildcard: false,
+      wildcardWithCredentials: false
+    },
+    exposure: {
+      server: "nginx",
+      poweredBy: "",
+      verbose: false
+    },
+    hsts: {
+      enabled: false,
+      maxAge: 0,
+      strong: false
+    },
+    htmlSignals: {
+      isHtml: true,
+      insecureLoginFormCount: 0,
+      mixedContentCount: 0
+    },
+    isHtml: true,
+    referrerPolicy: {
+      defined: false,
+      value: null,
+      weak: false
+    },
+    securityTxt: {
+      available: false,
+      hasContact: false,
+      hasExpires: false,
+      isExpired: false
+    },
+    tls: {
+      applicable: true,
+      daysUntilExpiry: -10,
+      hasTrustChainWarning: false,
+      isExpiringSoon: true,
+      isValid: false
+    },
+    xFrameOptions: ""
+  };
+  const httpProbe = {
+    success: true,
+    result: {
+      finalUrl: "https://example.com/",
+      redirectChain: [{ location: "https://example.com/", statusCode: 301, url: "http://example.com/" }]
+    }
+  };
+  const httpsProbe = {
+    success: true,
+    result: {
+      redirectChain: [{ location: null, statusCode: 200, url: "https://example.com/" }]
+    }
+  };
+  const securityTxt = {
+    scannedUrl: "https://example.com/.well-known/security.txt"
+  };
+
+  const findings = __internals.sortFindings(__internals.buildFindings({
+    analysis,
+    finalResponse,
+    httpProbe,
+    httpsProbe,
+    securityTxt
+  }));
+  const checks = __internals.buildChecks({
+    analysis,
+    findings,
+    finalResponse,
+    httpProbe,
+    httpsProbe,
+    securityTxt
+  });
+  const score = __internals.scoreChecks(checks);
+  const summary = __internals.buildSummary({
+    checks,
+    findings,
+    httpProbe,
+    httpsProbe,
+    score
+  });
+
+  assert.equal(summary.riskLevel, "Critical");
+  assert.equal(summary.grade, "F");
+  assert.equal(summary.score, 49);
+  assert.ok(findings.some((finding) => finding.id === "invalid_tls_cert" && finding.category === "direct"));
 });
 
 test("requestOnce truncates oversized text bodies and returns partial evidence safely", async () => {
