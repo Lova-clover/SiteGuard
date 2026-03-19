@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>SiteGuard Admin</title>
+    <link rel="icon" href="/logo-duck.png">
+    <link rel="stylesheet" href="/admin/admin.css">
+  </head>
+  <body>
+    <div class="admin-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img src="/logo-duck.png" alt="SiteGuard">
+          <div>
+            <p class="eyebrow">Private Admin</p>
+            <h1>SiteGuard 운영 대시보드</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <span id="session-status" class="status-pill">세션 확인 중</span>
+          <button id="logout-button" class="ghost-button" type="button" hidden>로그아웃</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section id="setup-panel" class="panel panel-narrow" hidden>
+          <h2>관리자 설정이 아직 없습니다</h2>
+          <p>
+            Vercel 환경 변수에 <code>ADMIN_USERNAME</code>, <code>ADMIN_PASSWORD_HASH</code> 또는
+            <code>ADMIN_PASSWORD</code>, <code>ADMIN_SESSION_SECRET</code>를 먼저 넣어주세요.
+          </p>
+          <p class="muted">
+            실행 수를 안정적으로 보려면 <code>UPSTASH_REDIS_REST_URL</code>과
+            <code>UPSTASH_REDIS_REST_TOKEN</code>도 함께 설정하는 편이 좋습니다.
+          </p>
+        </section>
+
+        <section id="login-panel" class="panel panel-narrow" hidden>
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Admin Login</p>
+              <h2>관리자만 볼 수 있는 화면입니다</h2>
+            </div>
+          </div>
+          <form id="login-form" class="login-form">
+            <label>
+              <span>아이디</span>
+              <input id="username-input" name="username" type="text" autocomplete="username" required>
+            </label>
+            <label>
+              <span>비밀번호</span>
+              <input id="password-input" name="password" type="password" autocomplete="current-password" required>
+            </label>
+            <button class="primary-button" type="submit">로그인</button>
+          </form>
+          <p id="login-error" class="error-text" hidden></p>
+        </section>
+
+        <section id="dashboard-panel" hidden>
+          <div class="panel hero-panel">
+            <div>
+              <p class="eyebrow">Overview</p>
+              <h2>방문과 실행 흐름을 한 번에 봅니다</h2>
+              <p class="hero-copy">
+                메인 화면은 그대로 두고, 여기에서만 방문자 수와 실제 점검 실행 수를 확인할 수 있습니다.
+              </p>
+            </div>
+            <div class="hero-meta">
+              <div class="metric-chip">
+                <span>업데이트 시각</span>
+                <strong id="generated-at">-</strong>
+              </div>
+              <div class="metric-chip">
+                <span>저장 방식</span>
+                <strong id="metrics-backend">-</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid metrics-grid">
+            <article class="panel metric-card">
+              <p class="eyebrow">Visitors</p>
+              <h3>방문자</h3>
+              <div class="metric-stack">
+                <strong id="visitors-total">0</strong>
+                <span>누적 고유 방문자</span>
+              </div>
+              <dl class="metric-list">
+                <div><dt>오늘</dt><dd id="visitors-today">0</dd></div>
+                <div><dt>최근 7일</dt><dd id="visitors-week">0</dd></div>
+                <div><dt>누적 페이지뷰</dt><dd id="views-total">0</dd></div>
+              </dl>
+            </article>
+
+            <article class="panel metric-card">
+              <p class="eyebrow">Page Views</p>
+              <h3>페이지 조회</h3>
+              <div class="metric-stack">
+                <strong id="views-today">0</strong>
+                <span>오늘 페이지뷰</span>
+              </div>
+              <dl class="metric-list">
+                <div><dt>최근 7일</dt><dd id="views-week">0</dd></div>
+                <div><dt>집계 기준</dt><dd id="time-zone">-</dd></div>
+              </dl>
+            </article>
+
+            <article class="panel metric-card">
+              <p class="eyebrow">Scans</p>
+              <h3>점검 실행</h3>
+              <div class="metric-stack">
+                <strong id="scans-total">0</strong>
+                <span>누적 실행 수</span>
+              </div>
+              <dl class="metric-list">
+                <div><dt>오늘</dt><dd id="scans-today">0</dd></div>
+                <div><dt>최근 7일</dt><dd id="scans-week">0</dd></div>
+                <div><dt>성공률</dt><dd id="scans-success-rate">0%</dd></div>
+              </dl>
+            </article>
+
+            <article class="panel metric-card">
+              <p class="eyebrow">Outcomes</p>
+              <h3>실행 결과</h3>
+              <div class="metric-stack">
+                <strong id="scans-successful">0</strong>
+                <span>성공한 점검</span>
+              </div>
+              <dl class="metric-list">
+                <div><dt>실패</dt><dd id="scans-failed">0</dd></div>
+                <div><dt>캐시 응답</dt><dd id="scans-cached">0</dd></div>
+                <div><dt>실시간 점검</dt><dd id="scans-fresh">0</dd></div>
+              </dl>
+            </article>
+          </div>
+
+          <div class="grid lower-grid">
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Activity</p>
+                  <h2>최근 7일 흐름</h2>
+                </div>
+              </div>
+              <div id="series-grid" class="series-grid"></div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow">Targets</p>
+                  <h2>많이 점검된 도메인</h2>
+                </div>
+              </div>
+              <div id="top-domains" class="list-block empty-state">아직 기록이 없습니다.</div>
+            </section>
+          </div>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Recent</p>
+                <h2>최근 실행 로그</h2>
+              </div>
+            </div>
+            <div id="recent-scans" class="table-shell empty-state">아직 실행 기록이 없습니다.</div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="/admin/admin.js" defer></script>
+  </body>
+</html>

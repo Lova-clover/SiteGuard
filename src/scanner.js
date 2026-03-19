@@ -2,12 +2,14 @@ import http from "node:http";
 import https from "node:https";
 import { lookup } from "node:dns/promises";
 import net from "node:net";
+import { parse as parseHtml } from "parse5";
 
 import { attachRemediation } from "./remediation.js";
 
 const MAX_REDIRECTS = 6;
 const MAX_BODY_BYTES = 262_144;
 const REQUEST_TIMEOUT_MS = 8_000;
+const TOTAL_REQUEST_TIMEOUT_MS = 10_000;
 const TEXTUAL_TYPES = [
   "application/json",
   "application/javascript",
@@ -34,7 +36,7 @@ export class ScanError extends Error {
 
 export async function scanTarget(rawUrl) {
   const inputUrl = normalizeInputUrl(rawUrl);
-  await assertPublicTarget(inputUrl);
+  await resolvePublicTarget(inputUrl);
 
   const targets = buildProtocolTargets(inputUrl);
   const [httpProbe, httpsProbe] = await Promise.all([
@@ -45,14 +47,15 @@ export async function scanTarget(rawUrl) {
   const primary = choosePrimaryProbe(httpProbe, httpsProbe);
   const finalResponse = primary.result.finalResponse;
   const cookies = parseCookies(finalResponse.headers["set-cookie"]);
-  const htmlSignals = extractHtmlSignals(finalResponse.body, primary.result.finalUrl, finalResponse.contentType);
-  const page = extractPageProfile(finalResponse.body, finalResponse.contentType);
+  const htmlProfile = inspectHtmlDocument(finalResponse.body, primary.result.finalUrl, finalResponse.contentType);
+  const htmlSignals = extractHtmlSignals(finalResponse.body, primary.result.finalUrl, finalResponse.contentType, htmlProfile);
+  const page = extractPageProfile(finalResponse.body, finalResponse.contentType, htmlProfile);
   const securityTxt = await inspectSecurityTxt(primary.result.finalUrl);
 
   const analysis = {
     cookies,
     csp: analyzeCsp(finalResponse.headers["content-security-policy"]),
-    cors: analyzeCors(finalResponse.headers),
+    cors: analyzeCors(finalResponse.headers, finalResponse.contentType),
     exposure: analyzeExposure(finalResponse.headers),
     hsts: analyzeHsts(finalResponse.headers["strict-transport-security"]),
     htmlSignals,
@@ -110,6 +113,7 @@ export async function scanTarget(rawUrl) {
       finalHeaders: finalResponse.headers,
       finalStatusCode: finalResponse.statusCode,
       finalContentType: finalResponse.contentType,
+      finalRemoteAddress: finalResponse.remoteAddress,
       tls: primary.protocol === "https" ? finalResponse.tls : null,
       cookies,
       page: {
@@ -147,6 +151,7 @@ function summarizeProbe(probe) {
     protocol: probe.protocol,
     finalUrl: probe.result.finalUrl,
     statusCode: probe.result.finalResponse.statusCode,
+    remoteAddress: probe.result.finalResponse.remoteAddress,
     responseTimeMs: probe.result.finalResponse.elapsedMs,
     redirectCount: probe.result.redirectChain.length - 1
   };
@@ -251,9 +256,8 @@ async function requestWithRedirects(startUrl) {
   let currentUrl = startUrl;
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    await assertPublicTarget(currentUrl);
-
-    const response = await requestOnce(currentUrl);
+    const resolvedTarget = await resolvePublicTarget(currentUrl);
+    const response = await requestOnce(currentUrl, resolvedTarget);
     const location = normalizeHeaderText(response.headers.location);
     const isRedirect = [301, 302, 303, 307, 308].includes(response.statusCode) && location;
 
@@ -280,12 +284,37 @@ async function requestWithRedirects(startUrl) {
   });
 }
 
-function requestOnce(url) {
+function requestOnce(url, resolvedTarget, policy = {}) {
+  if (!Array.isArray(resolvedTarget) && resolvedTarget && typeof resolvedTarget === "object") {
+    policy = resolvedTarget;
+    resolvedTarget = undefined;
+  }
+
   const startedAt = Date.now();
   const client = url.protocol === "https:" ? https : http;
+  const maxBodyBytes = policy.maxBodyBytes ?? MAX_BODY_BYTES;
+  const requestTimeoutMs = policy.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
+  const totalTimeoutMs = policy.totalTimeoutMs ?? TOTAL_REQUEST_TIMEOUT_MS;
+  const pinnedLookup = resolvedTarget?.length ? createPinnedLookup(resolvedTarget) : undefined;
 
   return new Promise((resolve, reject) => {
-    const request = client.request({
+    let settled = false;
+    let request;
+
+    const finish = (handler) => (value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(totalTimeout);
+      handler(value);
+    };
+
+    const finishWithResponse = finish(resolve);
+    const finishWithError = finish((error) => reject(normalizeRequestError(error)));
+
+    const requestOptions = {
       hostname: url.hostname,
       port: url.port || undefined,
       path: `${url.pathname || "/"}${url.search || ""}`,
@@ -296,47 +325,111 @@ function requestOnce(url) {
         Connection: "close",
         "User-Agent": "SiteGuard/1.0 (Web Security Posture Scanner)"
       },
-      rejectUnauthorized: false
-    }, (response) => {
+      rejectUnauthorized: false,
+      servername: net.isIP(url.hostname) ? undefined : url.hostname
+    };
+
+    if (pinnedLookup) {
+      requestOptions.lookup = pinnedLookup;
+    }
+
+    const totalTimeout = setTimeout(() => {
+      const error = new ScanError("?? ?? ??? ???????.", {
+        code: "REQUEST_TOTAL_TIMEOUT",
+        statusCode: 504
+      });
+      request?.destroy(error);
+      finishWithError(error);
+    }, totalTimeoutMs);
+
+    request = client.request(requestOptions, (response) => {
+      try {
+        if (resolvedTarget?.length) {
+          assertResolvedSocketAddress(response.socket, resolvedTarget);
+        }
+      } catch (error) {
+        finishWithError(error);
+        response.destroy();
+        return;
+      }
+
       const headers = normalizeHeaders(response.headers);
       const contentType = normalizeHeaderText(headers["content-type"]);
       const shouldCollectBody = isTextualContentType(contentType);
       const chunks = [];
       let totalBytes = 0;
+      let bodyTruncated = false;
+
+      const buildResponse = () => ({
+        body: shouldCollectBody ? Buffer.concat(chunks).toString("utf8") : "",
+        bodyTruncated,
+        contentType,
+        elapsedMs: Date.now() - startedAt,
+        headers,
+        remoteAddress: normalizeIpForComparison(response.socket?.remoteAddress),
+        statusCode: response.statusCode || 0,
+        tls: buildTlsSnapshot(response.socket, url.protocol)
+      });
+
+      if (!shouldCollectBody) {
+        finishWithResponse(buildResponse());
+        response.destroy();
+        return;
+      }
 
       response.on("data", (chunk) => {
-        if (!shouldCollectBody || totalBytes >= MAX_BODY_BYTES) {
+        if (settled || totalBytes >= maxBodyBytes) {
           return;
         }
 
-        const remaining = MAX_BODY_BYTES - totalBytes;
+        const remaining = maxBodyBytes - totalBytes;
         const nextChunk = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-        chunks.push(nextChunk);
-        totalBytes += nextChunk.length;
+
+        if (nextChunk.length) {
+          chunks.push(nextChunk);
+          totalBytes += nextChunk.length;
+        }
+
+        if (totalBytes >= maxBodyBytes) {
+          bodyTruncated = true;
+          finishWithResponse(buildResponse());
+          response.destroy();
+        }
       });
 
       response.on("end", () => {
-        const body = shouldCollectBody ? Buffer.concat(chunks).toString("utf8") : "";
-        resolve({
-          body,
-          contentType,
-          elapsedMs: Date.now() - startedAt,
-          headers,
-          statusCode: response.statusCode || 0,
-          tls: buildTlsSnapshot(response.socket, url.protocol)
-        });
+        finishWithResponse(buildResponse());
+      });
+
+      response.on("aborted", () => {
+        if (!settled) {
+          finishWithError(new ScanError("?? ??? ??? ??? ??????.", {
+            code: "REMOTE_ABORTED",
+            statusCode: 502
+          }));
+        }
+      });
+
+      response.on("error", (error) => {
+        if (!settled) {
+          finishWithError(error);
+        }
       });
     });
 
-    request.setTimeout(REQUEST_TIMEOUT_MS, () => {
-      request.destroy(new ScanError("요청 시간이 초과되었습니다.", {
+    request.setTimeout(requestTimeoutMs, () => {
+      const error = new ScanError("?? ??? ???????.", {
         code: "REQUEST_TIMEOUT",
         statusCode: 504
-      }));
+      });
+      request.destroy(error);
+      finishWithError(error);
     });
 
     request.on("error", (error) => {
-      reject(normalizeRequestError(error));
+      if (!settled) {
+        finishWithError(error);
+      }
     });
 
     request.end();
@@ -413,10 +506,14 @@ function isTextualContentType(contentType) {
 }
 
 async function assertPublicTarget(url) {
+  await resolvePublicTarget(url);
+}
+
+async function resolvePublicTarget(url, dnsLookup = lookup) {
   const hostname = url.hostname.toLowerCase();
 
   if (isBlockedHostname(hostname)) {
-    throw new ScanError("사설 또는 내부 호스트는 검사할 수 없습니다.", {
+    throw new ScanError("?? ?? ?? ???? ??? ? ????.", {
       code: "PRIVATE_HOST_BLOCKED",
       statusCode: 400
     });
@@ -424,37 +521,129 @@ async function assertPublicTarget(url) {
 
   if (net.isIP(hostname)) {
     if (isPrivateIp(hostname)) {
-      throw new ScanError("사설 또는 예약된 IP 주소는 검사할 수 없습니다.", {
+      throw new ScanError("?? ?? ??? IP ??? ??? ? ????.", {
         code: "PRIVATE_IP_BLOCKED",
         statusCode: 400
       });
     }
-    return;
+
+    return [{ address: hostname, family: net.isIP(hostname) }];
   }
 
   let resolved;
 
   try {
-    resolved = await lookup(hostname, { all: true, verbatim: true });
+    resolved = await dnsLookup(hostname, { all: true, verbatim: true });
   } catch (error) {
     throw normalizeRequestError(error);
   }
 
   if (!resolved.length) {
-    throw new ScanError("도메인을 확인할 수 없습니다.", {
+    throw new ScanError("???? ??? ? ????.", {
       code: "DNS_LOOKUP_EMPTY",
       statusCode: 404
     });
   }
 
-  for (const entry of resolved) {
+  const deduped = dedupeResolvedEntries(resolved);
+
+  for (const entry of deduped) {
     if (isPrivateIp(entry.address)) {
-      throw new ScanError("사설 또는 예약된 IP로 해석되는 도메인은 검사할 수 없습니다.", {
+      throw new ScanError("?? ?? ??? IP? ???? ???? ??? ? ????.", {
         code: "PRIVATE_DNS_TARGET_BLOCKED",
         statusCode: 400
       });
     }
   }
+
+  return deduped;
+}
+
+function dedupeResolvedEntries(entries) {
+  const unique = new Map();
+
+  for (const entry of entries) {
+    if (!entry?.address || !entry?.family) {
+      continue;
+    }
+
+    unique.set(`${entry.family}:${entry.address}`, {
+      address: entry.address,
+      family: entry.family
+    });
+  }
+
+  return [...unique.values()];
+}
+
+function createPinnedLookup(resolvedTarget) {
+  const addresses = dedupeResolvedEntries(resolvedTarget);
+
+  if (!addresses.length) {
+    throw new ScanError("Pinned DNS target is empty.", {
+      code: "DNS_PINNING_EMPTY",
+      statusCode: 502
+    });
+  }
+
+  return (_hostname, options, callback) => {
+    const normalizedOptions = typeof options === "number" ? { family: options } : (options || {});
+    const family = normalizedOptions.family || 0;
+    const matches = family
+      ? addresses.filter((entry) => entry.family === family)
+      : addresses;
+
+    if (!matches.length) {
+      const error = new Error("Pinned DNS target does not provide the requested address family.");
+      error.code = "EAI_ADDRFAMILY";
+      callback(error);
+      return;
+    }
+
+    if (normalizedOptions.all) {
+      callback(null, matches.map((entry) => ({
+        address: entry.address,
+        family: entry.family
+      })));
+      return;
+    }
+
+    callback(null, matches[0].address, matches[0].family);
+  };
+}
+
+function normalizeIpForComparison(ipAddress) {
+  if (!ipAddress) {
+    return "";
+  }
+
+  const normalized = String(ipAddress).toLowerCase().split("%")[0];
+  const mappedIpv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  return mappedIpv4 ? mappedIpv4[1] : normalized;
+}
+
+function assertResolvedSocketAddress(socket, resolvedTarget) {
+  const remoteAddress = normalizeIpForComparison(socket?.remoteAddress);
+
+  if (!remoteAddress) {
+    throw new ScanError("원격 소켓 주소를 확인할 수 없습니다.", {
+      code: "SOCKET_ADDRESS_MISSING",
+      statusCode: 502
+    });
+  }
+
+  const allowedAddresses = new Set(
+    dedupeResolvedEntries(resolvedTarget).map((entry) => normalizeIpForComparison(entry.address))
+  );
+
+  if (!allowedAddresses.has(remoteAddress)) {
+    throw new ScanError("실제 연결 주소가 검증한 DNS 대상과 일치하지 않습니다.", {
+      code: "SOCKET_ADDRESS_MISMATCH",
+      statusCode: 502
+    });
+  }
+
+  return remoteAddress;
 }
 
 function isBlockedHostname(hostname) {
@@ -590,13 +779,18 @@ function analyzeReferrerPolicy(headerValue) {
   };
 }
 
-function analyzeCors(headers) {
+function analyzeCors(headers, contentType = "") {
   const origin = normalizeHeaderText(headers["access-control-allow-origin"]);
   const credentials = normalizeHeaderText(headers["access-control-allow-credentials"]).toLowerCase();
+  const normalizedContentType = normalizeHeaderText(contentType || headers["content-type"]).toLowerCase();
+  const publicDocumentWildcard = origin === "*"
+    && credentials !== "true"
+    && normalizedContentType.startsWith("text/html");
 
   if (!origin) {
     return {
       configured: false,
+      publicDocumentWildcard: false,
       permissive: false,
       wildcardWithCredentials: false
     };
@@ -604,7 +798,8 @@ function analyzeCors(headers) {
 
   return {
     configured: true,
-    permissive: origin === "*",
+    permissive: origin === "*" && !publicDocumentWildcard,
+    publicDocumentWildcard,
     wildcardWithCredentials: origin === "*" && credentials === "true"
   };
 }
@@ -642,77 +837,148 @@ function parseCookies(headerValue) {
   });
 }
 
-function extractHtmlSignals(body, finalUrl, contentType) {
-  const isHtml = contentType.startsWith("text/html") || /<html[\s>]/i.test(body) || /<!doctype html/i.test(body);
-
-  if (!isHtml || !body) {
-    return {
-      insecureLoginFormCount: 0,
-      isHtml: false,
-      mixedContentCount: 0
-    };
-  }
-
-  const mixedMatches = body.match(/\b(?:src|href|action)=["']http:\/\//gi) || [];
-  const finalUrlObject = new URL(finalUrl);
-  let insecureLoginFormCount = 0;
-  const forms = body.match(/<form\b[\s\S]*?<\/form>/gi) || [];
-
-  for (const form of forms) {
-    if (!/type=["']password["']/i.test(form)) {
-      continue;
-    }
-
-    const methodMatch = form.match(/\bmethod=["']([^"']+)["']/i);
-    const actionMatch = form.match(/\baction=["']([^"']+)["']/i);
-    const method = (methodMatch?.[1] || "get").toLowerCase();
-    const action = actionMatch?.[1];
-
-    if (method === "get") {
-      insecureLoginFormCount += 1;
-      continue;
-    }
-
-    if (action) {
-      try {
-        const resolvedAction = new URL(action, finalUrlObject);
-        if (resolvedAction.protocol === "http:") {
-          insecureLoginFormCount += 1;
-        }
-      } catch {
-        insecureLoginFormCount += 1;
-      }
-    }
-  }
-
-  return {
-    insecureLoginFormCount,
-    isHtml: true,
-    mixedContentCount: finalUrlObject.protocol === "https:" ? mixedMatches.length : 0
-  };
-}
-
-function extractPageProfile(body, contentType) {
+function inspectHtmlDocument(body, finalUrl, contentType) {
   const isHtml = contentType.startsWith("text/html") || /<html[\s>]/i.test(body) || /<!doctype html/i.test(body);
 
   if (!isHtml || !body) {
     return {
       description: null,
+      insecureLoginFormCount: 0,
+      isHtml: false,
       lang: null,
+      mixedContentCount: 0,
       title: null
     };
   }
 
-  const titleMatch = body.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-  const descriptionMatch = body.match(/<meta[^>]*name=["']description["'][^>]*content=["']([^"']*)["'][^>]*>/i)
-    || body.match(/<meta[^>]*content=["']([^"']*)["'][^>]*name=["']description["'][^>]*>/i);
-  const langMatch = body.match(/<html[^>]*\blang=["']([^"']+)["']/i);
+  const document = parseHtml(body);
+  const finalUrlObject = finalUrl ? new URL(finalUrl) : null;
+  let description = null;
+  let insecureLoginFormCount = 0;
+  let lang = null;
+  let mixedContentCount = 0;
+  let title = null;
+
+  walkHtmlNodes(document, (node) => {
+    if (!node?.tagName) {
+      return;
+    }
+
+    const tagName = String(node.tagName).toLowerCase();
+
+    if (tagName === "html" && !lang) {
+      lang = normalizeHtmlText(getHtmlAttribute(node, "lang") || "");
+    }
+
+    if (tagName === "title" && !title) {
+      title = normalizeHtmlText(readHtmlText(node));
+    }
+
+    if (tagName === "meta" && !description) {
+      const name = (getHtmlAttribute(node, "name") || "").toLowerCase();
+      if (name === "description") {
+        description = normalizeHtmlText(getHtmlAttribute(node, "content") || "");
+      }
+    }
+
+    if (finalUrlObject?.protocol === "https:") {
+      for (const attributeName of ["src", "href", "action"]) {
+        const value = getHtmlAttribute(node, attributeName);
+        if (value && value.trim().toLowerCase().startsWith("http://")) {
+          mixedContentCount += 1;
+        }
+      }
+    }
+
+    if (tagName === "form" && formContainsPasswordField(node)) {
+      const method = (getHtmlAttribute(node, "method") || "get").toLowerCase();
+      const action = getHtmlAttribute(node, "action");
+
+      if (method === "get") {
+        insecureLoginFormCount += 1;
+        return;
+      }
+
+      if (action && finalUrlObject) {
+        try {
+          const resolvedAction = new URL(action, finalUrlObject);
+          if (resolvedAction.protocol === "http:") {
+            insecureLoginFormCount += 1;
+          }
+        } catch {
+          insecureLoginFormCount += 1;
+        }
+      }
+    }
+  });
 
   return {
-    description: normalizeHtmlText(descriptionMatch?.[1] || ""),
-    lang: normalizeHtmlText(langMatch?.[1] || ""),
-    title: normalizeHtmlText(titleMatch?.[1] || "")
+    description,
+    insecureLoginFormCount,
+    isHtml: true,
+    lang,
+    mixedContentCount,
+    title
   };
+}
+
+function extractHtmlSignals(body, finalUrl, contentType, cachedProfile) {
+  const profile = cachedProfile || inspectHtmlDocument(body, finalUrl, contentType);
+
+  return {
+    insecureLoginFormCount: profile.insecureLoginFormCount,
+    isHtml: profile.isHtml,
+    mixedContentCount: profile.mixedContentCount
+  };
+}
+
+function extractPageProfile(body, contentType, cachedProfile) {
+  const profile = cachedProfile || inspectHtmlDocument(body, null, contentType);
+
+  return {
+    description: profile.description,
+    lang: profile.lang,
+    title: profile.title
+  };
+}
+
+function walkHtmlNodes(node, visit) {
+  visit(node);
+
+  for (const child of node?.childNodes || []) {
+    walkHtmlNodes(child, visit);
+  }
+}
+
+function getHtmlAttribute(node, name) {
+  const attribute = node?.attrs?.find((entry) => entry.name?.toLowerCase() === name.toLowerCase());
+  return attribute?.value || "";
+}
+
+function readHtmlText(node) {
+  if (!node) {
+    return "";
+  }
+
+  if (node.nodeName === "#text") {
+    return node.value || "";
+  }
+
+  return (node.childNodes || []).map((child) => readHtmlText(child)).join("");
+}
+
+function formContainsPasswordField(node) {
+  let hasPasswordField = false;
+
+  walkHtmlNodes(node, (child) => {
+    if (hasPasswordField || child?.tagName !== "input") {
+      return;
+    }
+
+    hasPasswordField = (getHtmlAttribute(child, "type") || "").toLowerCase() === "password";
+  });
+
+  return hasPasswordField;
 }
 
 async function inspectSecurityTxt(finalUrl) {
@@ -1189,10 +1455,18 @@ export const __internals = {
   analyzeExposure,
   analyzeHsts,
   analyzeReferrerPolicy,
+  assertResolvedSocketAddress,
+  createPinnedLookup,
+  dedupeResolvedEntries,
   extractHtmlSignals,
+  extractPageProfile,
+  inspectHtmlDocument,
   isBlockedHostname,
   isPrivateIp,
+  normalizeIpForComparison,
   normalizeInputUrl,
   parseCookies,
+  requestOnce,
+  resolvePublicTarget,
   scoreChecks
 };

@@ -153,99 +153,173 @@
         </div>
 
         <div class="results-grid">
-          <!-- Score Panel -->
-          <div class="panel score-panel">
-            <div class="score-ring">
-              <svg class="score-svg" viewBox="0 0 100 100">
-                <defs>
-                  <linearGradient id="scoreGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" style="stop-color:#667eea"/>
-                    <stop offset="50%" style="stop-color:#764ba2"/>
-                    <stop offset="100%" style="stop-color:#f093fb"/>
-                  </linearGradient>
-                </defs>
-                <circle class="score-bg" cx="50" cy="50" r="42"/>
-                <circle id="score-ring-progress" class="score-progress" cx="50" cy="50" r="42" stroke-dasharray="264" stroke-dashoffset="264"/>
-              </svg>
-              <div class="score-center">
-                <span id="score-number" class="score-num">0</span>
-                <span class="score-max">/100</span>
+          <section class="panel decision-panel">
+            <div class="decision-primary">
+              <div class="decision-score">
+                <div class="score-ring compact">
+                  <svg class="score-svg" viewBox="0 0 100 100">
+                    <defs>
+                      <linearGradient id="scoreGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                        <stop offset="0%" style="stop-color:#667eea"/>
+                        <stop offset="50%" style="stop-color:#764ba2"/>
+                        <stop offset="100%" style="stop-color:#f093fb"/>
+                      </linearGradient>
+                    </defs>
+                    <circle class="score-bg" cx="50" cy="50" r="42"/>
+                    <circle id="score-ring-progress" class="score-progress" cx="50" cy="50" r="42" stroke-dasharray="264" stroke-dashoffset="264"/>
+                  </svg>
+                  <div class="score-center">
+                    <span id="score-number" class="score-num">0</span>
+                    <span class="score-max">/100</span>
+                  </div>
+                </div>
+                <div class="decision-score-meta">
+                  <div id="score-grade" class="score-grade">-</div>
+                  <div id="risk-badge" class="risk-badge">위험도: -</div>
+                </div>
+              </div>
+
+              <div class="decision-copy">
+                <p class="panel-kicker">현재 상태</p>
+                <h2 id="decision-title" class="decision-title">점검 결과를 정리하고 있습니다</h2>
+                <p id="decision-summary" class="decision-summary"></p>
+                <div class="decision-tags">
+                  <span id="deploy-badge" class="decision-tag">배포 판단</span>
+                  <span id="focus-badge" class="decision-tag subtle">우선 확인 항목</span>
+                </div>
               </div>
             </div>
-            <div id="score-grade" class="score-grade">-</div>
-            <div id="risk-badge" class="risk-badge">위험도: -</div>
-          </div>
 
-          <!-- Summary Panel -->
-          <div class="panel summary-panel">
-            <h2 class="panel-title">요약</h2>
-            <p id="summary-headline" class="summary-headline"></p>
-            <p id="summary-body" class="summary-body"></p>
-            <div class="stats-row">
-              <div class="stat-item pass">
-                <span class="stat-num" id="stat-passes">0</span>
-                <span class="stat-label">통과</span>
+            <div class="decision-metrics">
+              <div class="decision-metric">
+                <span class="decision-metric-label">즉시 조치</span>
+                <strong id="priority-immediate" class="decision-metric-value">0건</strong>
+                <span class="decision-metric-note">치명/높음 이슈</span>
               </div>
-              <div class="stat-item warn">
-                <span class="stat-num" id="stat-warnings">0</span>
-                <span class="stat-label">경고</span>
+              <div class="decision-metric">
+                <span class="decision-metric-label">배포 전 확인</span>
+                <strong id="priority-predeploy" class="decision-metric-value">0건</strong>
+                <span class="decision-metric-note">중간 우선순위</span>
               </div>
-              <div class="stat-item fail">
-                <span class="stat-num" id="stat-failures">0</span>
-                <span class="stat-label">실패</span>
+              <div class="decision-metric">
+                <span class="decision-metric-label">잘 되어 있는 부분</span>
+                <strong id="priority-strengths" class="decision-metric-value">0건</strong>
+                <span class="decision-metric-note">통과한 핵심 항목</span>
+              </div>
+              <div class="decision-metric">
+                <span class="decision-metric-label">검증 근거</span>
+                <strong id="priority-evidence" class="decision-metric-value">0개</strong>
+                <span class="decision-metric-note">세부 진단 항목</span>
               </div>
             </div>
-          </div>
+          </section>
 
-          <!-- Actions Panel -->
-          <div class="panel actions-panel">
-            <h2 class="panel-title">권장 조치</h2>
+          <section class="panel actions-panel">
+            <div class="panel-header stacked">
+              <div>
+                <p class="panel-kicker">우선순위</p>
+                <h2 class="section-title">지금 해야 할 일</h2>
+              </div>
+              <p id="actions-caption" class="panel-note"></p>
+            </div>
             <div id="actions-list" class="actions-list"></div>
-          </div>
+          </section>
 
-          <!-- Findings Panel -->
-          <div class="panel findings-panel">
-            <div class="panel-header">
-              <h2 class="panel-title">발견 항목</h2>
-              <div id="findings-filters" class="findings-filters"></div>
+          <section class="panel snapshot-panel">
+            <div class="panel-header stacked">
+              <div>
+                <p class="panel-kicker">상태 요약</p>
+                <h2 class="section-title">이번 점검에서 본 것</h2>
+              </div>
             </div>
-            <div id="findings-list" class="findings-list"></div>
-          </div>
+            <div class="snapshot-grid">
+              <div class="snapshot-card">
+                <span class="snapshot-label">실패</span>
+                <strong id="stat-failures" class="snapshot-value">0</strong>
+                <span class="snapshot-note">바로 막아야 하는 항목</span>
+              </div>
+              <div class="snapshot-card">
+                <span class="snapshot-label">경고</span>
+                <strong id="stat-warnings" class="snapshot-value">0</strong>
+                <span class="snapshot-note">배포 전 확인할 항목</span>
+              </div>
+              <div class="snapshot-card">
+                <span class="snapshot-label">통과</span>
+                <strong id="stat-passes" class="snapshot-value">0</strong>
+                <span class="snapshot-note">현재 잘 유지된 항목</span>
+              </div>
+              <div class="snapshot-card">
+                <span class="snapshot-label">핵심 메모</span>
+                <strong id="summary-headline" class="snapshot-callout">-</strong>
+                <span id="summary-body" class="snapshot-note"></span>
+              </div>
+            </div>
+          </section>
 
-          <!-- Checks Panel -->
-          <div class="panel checks-panel">
-            <h2 class="panel-title">상세 진단</h2>
+          <section class="panel strengths-panel">
+            <div class="panel-header stacked">
+              <div>
+                <p class="panel-kicker">강점</p>
+                <h2 class="section-title">잘 되어 있는 부분</h2>
+              </div>
+              <p class="panel-note">불필요한 수정 범위를 줄일 때 참고하세요.</p>
+            </div>
+            <div id="strengths-list" class="strengths-list"></div>
+          </section>
+
+          <section class="panel findings-panel">
+            <div class="panel-header stacked">
+              <div>
+                <p class="panel-kicker">문제 목록</p>
+                <h2 class="section-title">우선순위별로 정리한 발견 항목</h2>
+              </div>
+              <p class="panel-note">설명보다 조치가 먼저 보이도록 정리했습니다.</p>
+            </div>
+            <div id="findings-list" class="findings-list grouped"></div>
+          </section>
+
+          <section class="panel checks-panel">
+            <div class="panel-header stacked">
+              <div>
+                <p class="panel-kicker">세부 진단</p>
+                <h2 class="section-title">점검 항목별 상태</h2>
+              </div>
+              <p class="panel-note">전체 점검 항목을 빠르게 훑어볼 수 있습니다.</p>
+            </div>
             <div id="checks-grid" class="checks-grid"></div>
-          </div>
+          </section>
 
-          <!-- Details Panels -->
-          <div class="panel details-panel">
-            <details class="details-block" open>
-              <summary class="details-summary">리다이렉트 흐름</summary>
-              <div id="redirect-timeline" class="details-content"></div>
-            </details>
-          </div>
+          <section class="panel evidence-panel">
+            <div class="panel-header stacked">
+              <div>
+                <p class="panel-kicker">근거</p>
+                <h2 class="section-title">판단 근거와 원본 정보</h2>
+              </div>
+              <p class="panel-note">필요한 항목만 펼쳐서 확인하세요.</p>
+            </div>
 
-          <div class="panel details-panel">
-            <details class="details-block">
-              <summary class="details-summary">응답 헤더</summary>
-              <div id="headers-block" class="details-content headers-grid"></div>
-            </details>
-          </div>
+            <div class="evidence-stack">
+              <details class="details-block" open>
+                <summary class="details-summary">리다이렉트 흐름</summary>
+                <div id="redirect-timeline" class="details-content"></div>
+              </details>
 
-          <div class="panel details-panel">
-            <details class="details-block">
-              <summary class="details-summary">TLS 인증서</summary>
-              <div id="tls-card" class="details-content"></div>
-            </details>
-          </div>
+              <details class="details-block">
+                <summary class="details-summary">응답 헤더</summary>
+                <div id="headers-block" class="details-content headers-grid"></div>
+              </details>
 
-          <div class="panel details-panel">
-            <details class="details-block">
-              <summary class="details-summary">쿠키 설정</summary>
-              <div id="cookies-card" class="details-content"></div>
-            </details>
-          </div>
+              <details class="details-block">
+                <summary class="details-summary">TLS 인증서</summary>
+                <div id="tls-card" class="details-content"></div>
+              </details>
+
+              <details class="details-block">
+                <summary class="details-summary">쿠키 설정</summary>
+                <div id="cookies-card" class="details-content"></div>
+              </details>
+            </div>
+          </section>
         </div>
       </div>
     </section>

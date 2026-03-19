@@ -1,14 +1,6 @@
 const STORAGE_KEY = "siteguard:scan-snapshots:v2";
 const MAX_HISTORY_ITEMS = 8;
 
-const FINDING_FILTERS = [
-  { id: "all", label: "전체" },
-  { id: "critical", label: "치명" },
-  { id: "high", label: "높음" },
-  { id: "medium", label: "중간" },
-  { id: "low", label: "낮음" }
-];
-
 const LOADING_MESSAGES = [
   "보안 점검을 진행하고 있습니다...",
   "응답 헤더를 분석하고 있습니다...",
@@ -43,7 +35,6 @@ const severityLabels = {
 };
 
 let currentResult = null;
-let currentFilter = "all";
 let loadingInterval = null;
 
 // DOM Elements
@@ -53,9 +44,24 @@ const elements = {};
 document.addEventListener("DOMContentLoaded", () => {
   cacheElements();
   setupEventListeners();
+  trackVisit();
   renderHistory();
   checkHashNavigation();
 });
+
+function trackVisit() {
+  fetch("/api/metrics/visit", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      path: window.location.pathname
+    }),
+    credentials: "same-origin",
+    keepalive: true
+  }).catch(() => {});
+}
 
 function cacheElements() {
   elements.scanForm = document.getElementById("scan-form");
@@ -75,16 +81,25 @@ function cacheElements() {
   elements.scoreGrade = document.getElementById("score-grade");
   elements.scoreRingProgress = document.getElementById("score-ring-progress");
   elements.riskBadge = document.getElementById("risk-badge");
+  elements.decisionTitle = document.getElementById("decision-title");
+  elements.decisionSummary = document.getElementById("decision-summary");
+  elements.deployBadge = document.getElementById("deploy-badge");
+  elements.focusBadge = document.getElementById("focus-badge");
+  elements.priorityImmediate = document.getElementById("priority-immediate");
+  elements.priorityPredeploy = document.getElementById("priority-predeploy");
+  elements.priorityStrengths = document.getElementById("priority-strengths");
+  elements.priorityEvidence = document.getElementById("priority-evidence");
   elements.summaryHeadline = document.getElementById("summary-headline");
   elements.summaryBody = document.getElementById("summary-body");
+  elements.actionsCaption = document.getElementById("actions-caption");
 
   elements.statPasses = document.getElementById("stat-passes");
   elements.statWarnings = document.getElementById("stat-warnings");
   elements.statFailures = document.getElementById("stat-failures");
 
   elements.actionsList = document.getElementById("actions-list");
-  elements.findingsFilters = document.getElementById("findings-filters");
   elements.findingsList = document.getElementById("findings-list");
+  elements.strengthsList = document.getElementById("strengths-list");
   elements.checksGrid = document.getElementById("checks-grid");
   elements.redirectTimeline = document.getElementById("redirect-timeline");
   elements.headersBlock = document.getElementById("headers-block");
@@ -227,18 +242,20 @@ function showHistory() {
 
 // Render Results
 function renderResults(data) {
-  // Extract data from API response
   const summary = data.summary || {};
   const target = data.target || {};
   const evidence = data.evidence || {};
-  const findings = data.findings || [];
+  const findings = sortFindingsBySeverity(data.findings || []);
   const checks = data.checks || [];
+  const findingCounts = countFindings(findings);
+  const strengths = getStrengthChecks(checks);
+  const decision = getDeploymentDecision(summary, findingCounts);
+  const primaryFocus = getPrimaryFocus(findings);
 
   const score = summary.score ?? 0;
   const grade = summary.grade || "-";
   const riskLevel = summary.riskLevel || "-";
 
-  // URL and meta
   if (elements.resultUrl) {
     elements.resultUrl.textContent = target.hostname || target.finalUrl || "";
   }
@@ -246,75 +263,30 @@ function renderResults(data) {
     elements.resultMeta.textContent = `${target.finalUrl || ""} • ${new Date(target.scannedAt || Date.now()).toLocaleString("ko-KR")}`;
   }
 
-  // Score ring animation
   const circumference = 2 * Math.PI * 42;
   const offset = circumference - (score / 100) * circumference;
   elements.scoreRingProgress.style.strokeDashoffset = offset;
 
-  // Use gradient for score ring, but change based on grade for accessibility
-  const gradeColor = getGradeColor(grade);
-  // Keep using gradient, but update gradient stops dynamically would be complex
-  // So we'll use the defined gradient in SVG
-
-  // Animate score number
   animateNumber(elements.scoreNumber, score);
 
-  // Grade badge
   elements.scoreGrade.textContent = grade;
   elements.scoreGrade.className = `score-grade ${getGradeClass(grade)}`;
 
-  // Risk badge
   if (elements.riskBadge) {
     elements.riskBadge.textContent = `위험도: ${riskLevel}`;
     elements.riskBadge.className = `risk-badge ${getRiskClass(riskLevel)}`;
   }
 
-  // Summary
-  elements.summaryHeadline.textContent = summary.headline || "";
-  elements.summaryBody.innerHTML = generateSummaryBody(summary, findings);
-
-  // Stats
-  if (elements.statPasses) elements.statPasses.textContent = summary.passes ?? 0;
-  if (elements.statWarnings) elements.statWarnings.textContent = summary.warnings ?? 0;
-  if (elements.statFailures) elements.statFailures.textContent = summary.failures ?? 0;
-
-  // Actions (generate from findings)
-  renderActions(findings);
-
-  // Finding filters
-  renderFindingFilters();
-
-  // Findings
+  renderDecision(decision, summary, findings, checks, strengths, primaryFocus);
+  renderSnapshot(summary, findingCounts, checks);
+  renderActions(findings, decision);
+  renderStrengths(strengths);
   renderFindings(findings);
-
-  // Checks
   renderChecks(checks);
-
-  // Redirect timeline
   renderRedirects(evidence.redirectChain);
-
-  // Headers
   renderHeaders(evidence.finalHeaders);
-
-  // TLS
   renderTLS(evidence.tls);
-
-  // Cookies
   renderCookies(evidence.cookies);
-}
-
-function generateSummaryBody(summary, findings) {
-  const counts = summary.counts || {};
-  const parts = [];
-
-  if (counts.critical > 0) parts.push(`<span class="text-danger">치명 ${counts.critical}개</span>`);
-  if (counts.high > 0) parts.push(`<span class="text-warning">높음 ${counts.high}개</span>`);
-  if (counts.medium > 0) parts.push(`<span class="text-muted">중간 ${counts.medium}개</span>`);
-
-  if (parts.length > 0) {
-    return `발견된 문제: ${parts.join(", ")}`;
-  }
-  return "공개적으로 확인 가능한 기본 보안 항목은 양호합니다.";
 }
 
 function getGradeClass(grade) {
@@ -322,13 +294,6 @@ function getGradeClass(grade) {
   if (grade === "B" || grade === "B+") return "good";
   if (grade === "C" || grade === "C+") return "warning";
   return "danger";
-}
-
-function getGradeColor(grade) {
-  if (grade === "A" || grade === "A+") return "#16a34a";
-  if (grade === "B" || grade === "B+") return "#2563eb";
-  if (grade === "C" || grade === "C+") return "#ca8a04";
-  return "#dc2626";
 }
 
 function getRiskClass(risk) {
@@ -357,69 +322,240 @@ function animateNumber(element, target) {
   animate();
 }
 
-function renderActions(findings) {
+function sortFindingsBySeverity(findings) {
+  const order = {
+    critical: 0,
+    high: 1,
+    medium: 2,
+    low: 3,
+    info: 4
+  };
+
+  return [...findings].sort((left, right) => {
+    const severityDelta = (order[left.severity] ?? 99) - (order[right.severity] ?? 99);
+    if (severityDelta !== 0) {
+      return severityDelta;
+    }
+    return String(left.title || "").localeCompare(String(right.title || ""), "ko");
+  });
+}
+
+function countFindings(findings) {
+  return findings.reduce((counts, finding) => {
+    counts.total += 1;
+    counts[finding.severity] = (counts[finding.severity] || 0) + 1;
+    return counts;
+  }, {
+    critical: 0,
+    high: 0,
+    low: 0,
+    medium: 0,
+    total: 0
+  });
+}
+
+function getStrengthChecks(checks) {
+  return checks.filter(check => check.status === "pass");
+}
+
+function getPrimaryFocus(findings) {
+  const first = findings[0];
+  if (!first) {
+    return "양호";
+  }
+
+  return first.remediation?.title || first.title || "우선 확인 필요";
+}
+
+function getDeploymentDecision(summary, counts) {
+  const urgent = (counts.critical || 0) + (counts.high || 0);
+  const medium = counts.medium || 0;
+  const risk = String(summary.riskLevel || "");
+  const score = Number(summary.score || 0);
+
+  if (counts.critical > 0 || urgent >= 3 || risk === "Critical" || risk === "High" || score < 50) {
+    return {
+      label: "배포 전 보완 필요",
+      summary: "치명도 높은 항목이 남아 있어 공개 상태를 유지하기 전에 먼저 정리하는 편이 좋습니다.",
+      title: "배포 전에 즉시 보완이 필요합니다",
+      tone: "danger"
+    };
+  }
+
+  if (urgent > 0 || medium >= 2 || risk === "Moderate" || score < 80) {
+    return {
+      label: "조건부 진행 가능",
+      summary: "서비스는 동작할 수 있지만, 중요한 설정을 먼저 정리하면 운영 리스크를 크게 줄일 수 있습니다.",
+      title: "중요한 항목부터 정리하면 더 안전해집니다",
+      tone: "warning"
+    };
+  }
+
+  return {
+    label: "현재 상태 양호",
+    summary: "공개적으로 확인 가능한 핵심 보안 항목은 대체로 잘 갖춰져 있습니다.",
+    title: "현재 공개 상태는 대체로 안정적입니다",
+    tone: "good"
+  };
+}
+
+function renderDecision(decision, summary, findings, checks, strengths, primaryFocus) {
+  if (elements.decisionTitle) {
+    elements.decisionTitle.textContent = decision.title;
+  }
+
+  if (elements.decisionSummary) {
+    const headline = summary.headline ? `${summary.headline} ` : "";
+    elements.decisionSummary.textContent = `${headline}${decision.summary}`.trim();
+  }
+
+  if (elements.deployBadge) {
+    elements.deployBadge.textContent = decision.label;
+    elements.deployBadge.className = `decision-tag ${decision.tone}`;
+  }
+
+  if (elements.focusBadge) {
+    elements.focusBadge.textContent = `가장 먼저: ${primaryFocus}`;
+  }
+
+  if (elements.priorityImmediate) {
+    elements.priorityImmediate.textContent = `${(findings.filter(f => f.severity === "critical" || f.severity === "high")).length}건`;
+  }
+
+  if (elements.priorityPredeploy) {
+    elements.priorityPredeploy.textContent = `${(findings.filter(f => f.severity === "medium")).length}건`;
+  }
+
+  if (elements.priorityStrengths) {
+    elements.priorityStrengths.textContent = `${strengths.length}건`;
+  }
+
+  if (elements.priorityEvidence) {
+    elements.priorityEvidence.textContent = `${checks.length}개`;
+  }
+}
+
+function renderSnapshot(summary, counts, checks) {
+  if (elements.statPasses) {
+    elements.statPasses.textContent = summary.passes ?? checks.filter(check => check.status === "pass").length;
+  }
+  if (elements.statWarnings) {
+    elements.statWarnings.textContent = summary.warnings ?? checks.filter(check => check.status === "warn").length;
+  }
+  if (elements.statFailures) {
+    elements.statFailures.textContent = summary.failures ?? checks.filter(check => check.status === "fail").length;
+  }
+
+  if (elements.summaryHeadline) {
+    elements.summaryHeadline.textContent = counts.total
+      ? `문제 ${counts.total}건 발견`
+      : "즉시 대응할 문제는 없습니다";
+  }
+
+  if (elements.summaryBody) {
+    const parts = [];
+    if (counts.critical) parts.push(`치명 ${counts.critical}건`);
+    if (counts.high) parts.push(`높음 ${counts.high}건`);
+    if (counts.medium) parts.push(`중간 ${counts.medium}건`);
+    if (counts.low) parts.push(`낮음 ${counts.low}건`);
+    elements.summaryBody.textContent = parts.length ? parts.join(" · ") : "공개적으로 확인 가능한 핵심 보안 항목은 양호합니다.";
+  }
+}
+
+function getActionStep(finding) {
+  return finding.remediation?.actions?.[0] || "해당 설정을 먼저 확인해 주세요.";
+}
+
+function getActionTitle(finding) {
+  return finding.remediation?.title || finding.title || "우선 조치 필요";
+}
+
+function getActionTone(finding) {
+  if (finding.severity === "critical" || finding.severity === "high") return "urgent";
+  if (finding.severity === "medium") return "planned";
+  return "later";
+}
+
+function renderActions(findings, decision) {
   if (!elements.actionsList) return;
 
-  // Generate action items from findings
-  const urgentFindings = findings.filter(f => f.severity === "critical" || f.severity === "high");
-  const otherFindings = findings.filter(f => f.severity === "medium" || f.severity === "low");
+  const actionFindings = findings.slice(0, 3);
 
-  if (!findings.length) {
-    elements.actionsList.innerHTML = `<div class="empty-state-inline">모든 보안 점검 항목이 양호합니다.</div>`;
+  if (elements.actionsCaption) {
+    elements.actionsCaption.textContent = findings.length
+      ? "영향이 큰 순서대로 3개만 먼저 보여줍니다."
+      : decision.label;
+  }
+
+  if (!actionFindings.length) {
+    elements.actionsList.innerHTML = `<div class="empty-state-inline">즉시 진행할 조치는 많지 않습니다. 현재 상태를 유지하면서 정기 점검을 이어가면 됩니다.</div>`;
     return;
   }
 
-  let html = "";
-
-  if (urgentFindings.length > 0) {
-    html += `<div class="action-group">
-      <div class="action-group-title urgent">즉시 조치 필요</div>
-      ${urgentFindings.slice(0, 5).map((f, i) => `
-        <div class="action-item urgent">
-          <span class="action-num">${i + 1}</span>
-          <div class="action-content">
-            <div class="action-title">${f.title}</div>
-            <div class="action-desc">${f.summary || ""}</div>
+  elements.actionsList.innerHTML = actionFindings.map((finding, index) => `
+    <article class="action-plan ${getActionTone(finding)}">
+      <div class="action-plan-top">
+        <span class="action-num">${index + 1}</span>
+        <span class="action-chip ${getActionTone(finding)}">${severityLabels[finding.severity] || "우선"}</span>
+      </div>
+      <div class="action-content">
+        <h3 class="action-title">${escapeHtml(getActionTitle(finding))}</h3>
+        <p class="action-desc">${escapeHtml(finding.remediation?.whyItMatters || finding.summary || "영향이 큰 항목부터 먼저 정리해 주세요.")}</p>
+        <div class="action-detail-row">
+          <div class="action-detail">
+            <span class="action-detail-label">먼저 할 일</span>
+            <strong>${escapeHtml(getActionStep(finding))}</strong>
+          </div>
+          <div class="action-detail subtle">
+            <span class="action-detail-label">근거</span>
+            <strong>${escapeHtml(finding.evidence || "세부 진단에서 확인 가능")}</strong>
           </div>
         </div>
-      `).join("")}
-    </div>`;
-  }
-
-  if (otherFindings.length > 0) {
-    html += `<div class="action-group">
-      <div class="action-group-title">권장 개선 사항</div>
-      ${otherFindings.slice(0, 5).map((f, i) => `
-        <div class="action-item">
-          <span class="action-num">${urgentFindings.length + i + 1}</span>
-          <div class="action-content">
-            <div class="action-title">${f.title}</div>
-            <div class="action-desc">${f.summary || ""}</div>
-          </div>
-        </div>
-      `).join("")}
-    </div>`;
-  }
-
-  elements.actionsList.innerHTML = html;
+      </div>
+    </article>
+  `).join("");
 }
 
-function renderFindingFilters() {
-  if (!elements.findingsFilters) return;
+function renderStrengths(strengths) {
+  if (!elements.strengthsList) return;
 
-  elements.findingsFilters.innerHTML = FINDING_FILTERS.map(filter => `
-    <button type="button" class="filter-btn ${filter.id === currentFilter ? "active" : ""}" data-filter="${filter.id}">
-      ${filter.label}
-    </button>
+  if (!strengths.length) {
+    elements.strengthsList.innerHTML = `<div class="empty-state-inline">이번 점검에서는 바로 강조할 강점이 많지 않습니다. 보안 헤더와 전송 보안부터 먼저 다듬어 보세요.</div>`;
+    return;
+  }
+
+  elements.strengthsList.innerHTML = strengths.slice(0, 5).map((check) => `
+    <article class="strength-card">
+      <div class="strength-icon">✓</div>
+      <div class="strength-content">
+        <h3>${escapeHtml(check.label || "통과")}</h3>
+        <p>${escapeHtml(check.detail || "핵심 항목이 정상적으로 확인되었습니다.")}</p>
+      </div>
+    </article>
   `).join("");
+}
 
-  elements.findingsFilters.querySelectorAll(".filter-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      currentFilter = btn.dataset.filter;
-      renderFindingFilters();
-      renderFindings(currentResult?.findings || []);
-    });
-  });
+function buildFindingGroups(findings) {
+  return [
+    {
+      id: "urgent",
+      title: "지금 막아야 하는 문제",
+      description: "치명도 높은 항목입니다. 먼저 손대면 위험을 가장 크게 줄일 수 있습니다.",
+      items: findings.filter(finding => finding.severity === "critical" || finding.severity === "high")
+    },
+    {
+      id: "planned",
+      title: "이번 배포 전에 확인할 문제",
+      description: "서비스는 동작할 수 있지만, 배포 전에 정리해 두는 편이 좋습니다.",
+      items: findings.filter(finding => finding.severity === "medium")
+    },
+    {
+      id: "later",
+      title: "운영상 개선하면 좋은 항목",
+      description: "즉시 위험은 낮지만, 운영 성숙도와 신뢰도를 높이는 데 도움이 됩니다.",
+      items: findings.filter(finding => finding.severity === "low" || finding.severity === "info")
+    }
+  ];
 }
 
 function renderFindings(findings) {
@@ -430,31 +566,63 @@ function renderFindings(findings) {
     return;
   }
 
-  const filtered = currentFilter === "all"
-    ? findings
-    : findings.filter(f => f.severity === currentFilter);
-
-  if (!filtered.length) {
-    elements.findingsList.innerHTML = `<div class="empty-state-inline">해당 필터에 맞는 항목이 없습니다.</div>`;
-    return;
-  }
-
-  elements.findingsList.innerHTML = filtered.map(finding => `
-    <div class="finding-card ${finding.severity}">
-      <div class="finding-header">
-        <span class="finding-title">${finding.title}</span>
-        <span class="finding-badge ${finding.severity}">${severityLabels[finding.severity] || finding.severity}</span>
+  elements.findingsList.innerHTML = buildFindingGroups(findings).map((group) => `
+    <section class="finding-group ${group.id}">
+      <div class="finding-group-head">
+        <div>
+          <h3>${group.title}</h3>
+          <p>${group.description}</p>
+        </div>
+        <span class="finding-group-count">${group.items.length}건</span>
       </div>
-      <div class="finding-desc">${finding.summary || ""}</div>
-      ${finding.evidence ? `<div class="finding-evidence">${finding.evidence}</div>` : ""}
-    </div>
+      ${group.items.length ? `
+        <div class="finding-group-list">
+          ${group.items.map((finding) => `
+            <article class="finding-card ${finding.severity}">
+              <div class="finding-header">
+                <div>
+                  <span class="finding-title">${escapeHtml(finding.title || "발견 항목")}</span>
+                  <p class="finding-desc">${escapeHtml(finding.summary || "세부 진단에서 내용을 확인해 주세요.")}</p>
+                </div>
+                <span class="finding-badge ${finding.severity}">${severityLabels[finding.severity] || finding.severity}</span>
+              </div>
+              <div class="finding-grid">
+                <div class="finding-detail">
+                  <span class="finding-detail-label">권장 조치</span>
+                  <strong>${escapeHtml(getActionStep(finding))}</strong>
+                </div>
+                <div class="finding-detail subtle">
+                  <span class="finding-detail-label">근거</span>
+                  <strong>${escapeHtml(finding.evidence || "세부 진단에서 확인 가능")}</strong>
+                </div>
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      ` : `
+        <div class="empty-state-inline">이 구간에 해당하는 항목은 없습니다.</div>
+      `}
+    </section>
   `).join("");
 }
 
 function renderChecks(checks) {
   if (!elements.checksGrid || !checks || !checks.length) return;
 
-  elements.checksGrid.innerHTML = checks.map(check => {
+  const statusOrder = {
+    fail: 0,
+    warn: 1,
+    pass: 2,
+    na: 3
+  };
+
+  elements.checksGrid.innerHTML = [...checks].sort((left, right) => {
+    const delta = (statusOrder[left.status] ?? 9) - (statusOrder[right.status] ?? 9);
+    if (delta !== 0) {
+      return delta;
+    }
+    return String(left.label || "").localeCompare(String(right.label || ""), "ko");
+  }).map(check => {
     const statusClass = check.status === "pass" ? "pass" : check.status === "warn" ? "warn" : check.status === "fail" ? "fail" : "na";
     const statusIcon = check.status === "pass" ? "✓" : check.status === "warn" ? "!" : check.status === "fail" ? "✗" : "-";
 
@@ -510,8 +678,8 @@ function renderHeaders(headers) {
 
   elements.headersBlock.innerHTML = sorted.slice(0, 20).map(([name, value]) => `
     <div class="header-item">
-      <div class="header-name">${name}</div>
-      <div class="header-value">${Array.isArray(value) ? value.join(", ") : value}</div>
+      <div class="header-name">${escapeHtml(name)}</div>
+      <div class="header-value">${escapeHtml(Array.isArray(value) ? value.join(", ") : value)}</div>
     </div>
   `).join("");
 }
@@ -570,9 +738,9 @@ function renderCookies(cookies) {
 
     return `
       <div class="cookie-item">
-        <div class="cookie-name">${cookie.name}</div>
+        <div class="cookie-name">${escapeHtml(cookie.name)}</div>
         <div class="cookie-flags">
-          ${flags.map(f => `<span class="cookie-flag ${f.ok ? "ok" : "bad"}">${f.text}</span>`).join("")}
+          ${flags.map(f => `<span class="cookie-flag ${f.ok ? "ok" : "bad"}">${escapeHtml(f.text)}</span>`).join("")}
         </div>
       </div>
     `;
@@ -743,4 +911,13 @@ function showToast(message) {
     toast.classList.add("hide");
     setTimeout(() => toast.remove(), 300);
   }, 2000);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

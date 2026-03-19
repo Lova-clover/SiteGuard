@@ -4,6 +4,15 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import {
+  clearAdminSessionCookie,
+  createAdminSessionCookie,
+  ensureVisitorCookie,
+  isAdminConfigured,
+  readAdminSession,
+  verifyAdminCredentials
+} from "./src/admin-auth.js";
+import { createMetricsStore } from "./src/metrics-store.js";
 import { ScanError, scanTarget } from "./src/scanner.js";
 import {
   createConcurrencyGuard,
@@ -68,7 +77,7 @@ function applyBaseHeaders(response, request, requestId, { cacheControl = "no-sto
   response.setHeader("X-Request-Id", requestId);
   response.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
   );
 
   if (isSecureRequest(request)) {
@@ -80,16 +89,22 @@ function applyBaseHeaders(response, request, requestId, { cacheControl = "no-sto
   }
 }
 
+function setExtraHeaders(response, extraHeaders = {}) {
+  for (const [key, value] of Object.entries(extraHeaders)) {
+    if (value == null) {
+      continue;
+    }
+
+    response.setHeader(key, value);
+  }
+}
+
 function sendJson(response, request, requestId, statusCode, payload, extraHeaders = {}) {
   applyBaseHeaders(response, request, requestId, {
     cacheControl: "no-store",
     contentType: "application/json; charset=utf-8"
   });
-
-  for (const [key, value] of Object.entries(extraHeaders)) {
-    response.setHeader(key, value);
-  }
-
+  setExtraHeaders(response, extraHeaders);
   response.writeHead(statusCode);
   response.end(JSON.stringify(payload, null, 2));
 }
@@ -134,7 +149,9 @@ async function readJsonBody(request) {
 }
 
 async function serveStatic(request, response, requestId, pathname) {
-  const requestPath = pathname === "/" ? "/index.html" : pathname;
+  const requestPath = pathname === "/"
+    ? "/index.html"
+    : (pathname === "/admin" || pathname === "/admin/" ? "/admin/index.html" : pathname);
   const filePath = normalizePublicPath(requestPath);
 
   try {
@@ -143,6 +160,9 @@ async function serveStatic(request, response, requestId, pathname) {
       cacheControl: filePath.endsWith("index.html") ? "no-store" : "public, max-age=86400, immutable",
       contentType: getMimeType(filePath)
     });
+    if (requestPath.startsWith("/admin")) {
+      response.setHeader("X-Robots-Tag", "noindex, nofollow");
+    }
     response.writeHead(200);
     response.end(request.method === "HEAD" ? undefined : file);
   } catch (error) {
@@ -153,17 +173,172 @@ async function serveStatic(request, response, requestId, pathname) {
       });
     }
 
-    const fallback = await readFile(path.join(publicDir, "index.html"));
+    const fallbackPath = pathname.startsWith("/admin") ? "/admin/index.html" : "/index.html";
+    const fallback = await readFile(path.join(publicDir, fallbackPath));
     applyBaseHeaders(response, request, requestId, {
       cacheControl: "no-store",
       contentType: "text/html; charset=utf-8"
     });
+    if (pathname.startsWith("/admin")) {
+      response.setHeader("X-Robots-Tag", "noindex, nofollow");
+    }
     response.writeHead(200);
     response.end(request.method === "HEAD" ? undefined : fallback);
   }
 }
 
-function createScanResponder({ scan, cache, concurrencyGuard, rateLimiter }) {
+function extractHostname(input) {
+  if (typeof input !== "string" || !input.trim()) {
+    return "";
+  }
+
+  try {
+    return new URL(input).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function toScanMetric(result, fallbackHostname, requestId, durationMs, cached) {
+  return {
+    cached,
+    durationMs,
+    hostname: result?.target?.hostname || fallbackHostname,
+    ok: true,
+    requestId,
+    score: result?.summary?.score ?? null
+  };
+}
+
+function toScanFailureMetric(hostname, requestId, durationMs, errorCode) {
+  return {
+    cached: false,
+    durationMs,
+    errorCode,
+    hostname,
+    ok: false,
+    requestId,
+    score: null
+  };
+}
+
+async function recordMetricSilently(metrics, action, payload) {
+  try {
+    await metrics[action](payload);
+  } catch (error) {
+    console.error(`Metrics ${action} failed:`, error);
+  }
+}
+
+async function handleVisitRequest(request, response, requestId, metrics) {
+  const visitor = ensureVisitorCookie(request);
+  const body = await readJsonBody(request);
+  const rawPath = typeof body.path === "string" ? body.path : "/";
+
+  await metrics.recordVisit({
+    path: rawPath,
+    visitorId: visitor.visitorId
+  });
+
+  sendJson(response, request, requestId, 200, {
+    ok: true,
+    tracked: true
+  }, visitor.setCookie ? { "Set-Cookie": visitor.setCookie } : {});
+}
+
+async function handleAdminLoginRequest(request, response, requestId) {
+  if (!isAdminConfigured()) {
+    sendJson(response, request, requestId, 503, {
+      ok: false,
+      error: {
+        code: "ADMIN_NOT_CONFIGURED",
+        message: "Admin access is not configured yet."
+      }
+    });
+    return;
+  }
+
+  const body = await readJsonBody(request);
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+
+  if (!verifyAdminCredentials(username, password)) {
+    sendJson(response, request, requestId, 401, {
+      ok: false,
+      error: {
+        code: "ADMIN_AUTH_FAILED",
+        message: "Incorrect administrator credentials."
+      }
+    });
+    return;
+  }
+
+  sendJson(response, request, requestId, 200, {
+    ok: true,
+    admin: {
+      username
+    }
+  }, {
+    "Set-Cookie": createAdminSessionCookie(request, username)
+  });
+}
+
+function handleAdminLogoutRequest(request, response, requestId) {
+  sendJson(response, request, requestId, 200, {
+    ok: true
+  }, {
+    "Set-Cookie": clearAdminSessionCookie(request)
+  });
+}
+
+function handleAdminSessionRequest(request, response, requestId) {
+  const session = readAdminSession(request);
+
+  sendJson(response, request, requestId, 200, {
+    ok: true,
+    admin: {
+      authenticated: Boolean(session),
+      configured: isAdminConfigured(),
+      username: session?.username || null
+    }
+  });
+}
+
+async function handleAdminMetricsRequest(request, response, requestId, metrics) {
+  if (!isAdminConfigured()) {
+    sendJson(response, request, requestId, 503, {
+      ok: false,
+      error: {
+        code: "ADMIN_NOT_CONFIGURED",
+        message: "Admin access is not configured yet."
+      }
+    });
+    return;
+  }
+
+  const session = readAdminSession(request);
+  if (!session) {
+    sendJson(response, request, requestId, 401, {
+      ok: false,
+      error: {
+        code: "ADMIN_AUTH_REQUIRED",
+        message: "Administrator login is required."
+      }
+    });
+    return;
+  }
+
+  const snapshot = await metrics.getSnapshot();
+  sendJson(response, request, requestId, 200, {
+    ok: true,
+    admin: {
+      username: session.username
+    },
+    metrics: snapshot
+  });
+}
+
+function createScanResponder({ scan, cache, concurrencyGuard, metrics, rateLimiter }) {
   return async function handleScan(request, response, requestId) {
     const clientIp = getClientIp(request);
     const rate = rateLimiter.check(clientIp);
@@ -197,21 +372,26 @@ function createScanResponder({ scan, cache, concurrencyGuard, rateLimiter }) {
     }
 
     const startedAt = Date.now();
+    let hostnameHint = "";
 
     try {
       const body = await readJsonBody(request);
       const cacheKey = typeof body.url === "string" ? body.url.trim() : "";
+      hostnameHint = extractHostname(cacheKey);
       const cachedPayload = cacheKey ? cache.get(cacheKey) : null;
 
       if (cachedPayload) {
-        sendJson(response, request, requestId, 200, {
+        const payload = {
           ...structuredClone(cachedPayload),
           meta: {
             cached: true,
             durationMs: 0,
             requestId
           }
-        }, rateHeaders);
+        };
+
+        await recordMetricSilently(metrics, "recordScan", toScanMetric(payload, hostnameHint, requestId, 0, true));
+        sendJson(response, request, requestId, 200, payload, rateHeaders);
         return;
       }
 
@@ -229,14 +409,38 @@ function createScanResponder({ scan, cache, concurrencyGuard, rateLimiter }) {
         cache.set(cacheKey, payload);
       }
 
+      await recordMetricSilently(
+        metrics,
+        "recordScan",
+        toScanMetric(payload, hostnameHint, requestId, payload.meta.durationMs, false)
+      );
+
       sendJson(response, request, requestId, 200, payload, rateHeaders);
+    } catch (error) {
+      const statusCode = error instanceof ScanError ? error.statusCode : 500;
+      const code = error instanceof ScanError ? error.code : "INTERNAL_ERROR";
+      const message = error instanceof ScanError ? error.message : "Unexpected server error.";
+
+      await recordMetricSilently(
+        metrics,
+        "recordScan",
+        toScanFailureMetric(hostnameHint, requestId, Date.now() - startedAt, code)
+      );
+
+      sendJson(response, request, requestId, statusCode, {
+        ok: false,
+        error: {
+          code,
+          message
+        }
+      }, rateHeaders);
     } finally {
       concurrencyGuard.leave();
     }
   };
 }
 
-export function createAppServer({ scan = scanTarget } = {}) {
+export function createAppServer({ metrics = createMetricsStore(), scan = scanTarget } = {}) {
   const bootedAt = Date.now();
   const cache = createTtlCache({
     ttlMs: CACHE_TTL_MS,
@@ -253,6 +457,7 @@ export function createAppServer({ scan = scanTarget } = {}) {
     scan,
     cache,
     concurrencyGuard,
+    metrics,
     rateLimiter
   });
 
@@ -270,13 +475,39 @@ export function createAppServer({ scan = scanTarget } = {}) {
           mode: "passive-public-scan",
           uptimeSec: Math.round((Date.now() - bootedAt) / 1000),
           activeScans: concurrencyGuard.size(),
-          cacheEntries: cache.size()
+          cacheEntries: cache.size(),
+          metricsBackend: metrics.backend || "memory"
         });
         return;
       }
 
       if (request.method === "POST" && pathname === "/api/scan") {
         await handleScan(request, response, requestId);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/metrics/visit") {
+        await handleVisitRequest(request, response, requestId, metrics);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/login") {
+        await handleAdminLoginRequest(request, response, requestId);
+        return;
+      }
+
+      if (request.method === "POST" && pathname === "/api/admin/logout") {
+        handleAdminLogoutRequest(request, response, requestId);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/session") {
+        handleAdminSessionRequest(request, response, requestId);
+        return;
+      }
+
+      if (request.method === "GET" && pathname === "/api/admin/metrics") {
+        await handleAdminMetricsRequest(request, response, requestId, metrics);
         return;
       }
 
@@ -313,8 +544,12 @@ export function startServer(port = PORT) {
   return server;
 }
 
-process.on('unhandledRejection', (reason, promise) => { console.error('Unhandled Rejection at:', promise, 'reason:', reason); });
-process.on('uncaughtException', (error) => { console.error('Uncaught Exception:', error); });
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
+process.on("uncaughtException", (error) => {
+  console.error("Uncaught Exception:", error);
+});
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   startServer();

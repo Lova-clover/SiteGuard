@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
 
+import {
+  clearAdminSessionCookie,
+  createAdminSessionCookie,
+  ensureVisitorCookie,
+  isAdminConfigured,
+  readAdminSession,
+  verifyAdminCredentials
+} from "../src/admin-auth.js";
+import { createMetricsStore } from "../src/metrics-store.js";
 import { ScanError, scanTarget } from "../src/scanner.js";
 import {
   createConcurrencyGuard,
@@ -24,6 +33,7 @@ function getState() {
       concurrencyGuard: createConcurrencyGuard({
         limit: MAX_CONCURRENT_SCANS
       }),
+      metrics: createMetricsStore(),
       rateLimiter: createFixedWindowRateLimiter({
         limit: RATE_LIMIT_MAX,
         windowMs: RATE_LIMIT_WINDOW_MS
@@ -63,7 +73,7 @@ function buildBaseHeaders(request, requestId, { cacheControl = "no-store", conte
     "Cross-Origin-Resource-Policy": "same-origin",
     "X-DNS-Prefetch-Control": "off",
     "X-Request-Id": requestId,
-    "Content-Security-Policy": "default-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net data:; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    "Content-Security-Policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; font-src 'self'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests"
   });
 
   if (isSecureRequest(request)) {
@@ -84,7 +94,9 @@ function jsonResponse(request, requestId, status, payload, extraHeaders = {}) {
   });
 
   for (const [key, value] of Object.entries(extraHeaders)) {
-    headers.set(key, String(value));
+    if (value != null) {
+      headers.set(key, String(value));
+    }
   }
 
   return new Response(JSON.stringify(payload, null, 2), {
@@ -124,6 +136,49 @@ async function readJsonBody(request) {
   }
 }
 
+function extractHostname(input) {
+  if (typeof input !== "string" || !input.trim()) {
+    return "";
+  }
+
+  try {
+    return new URL(input).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function toScanMetric(result, fallbackHostname, requestId, durationMs, cached) {
+  return {
+    cached,
+    durationMs,
+    hostname: result?.target?.hostname || fallbackHostname,
+    ok: true,
+    requestId,
+    score: result?.summary?.score ?? null
+  };
+}
+
+function toScanFailureMetric(hostname, requestId, durationMs, errorCode) {
+  return {
+    cached: false,
+    durationMs,
+    errorCode,
+    hostname,
+    ok: false,
+    requestId,
+    score: null
+  };
+}
+
+async function recordMetricSilently(metrics, action, payload) {
+  try {
+    await metrics[action](payload);
+  } catch (error) {
+    console.error(`Metrics ${action} failed:`, error);
+  }
+}
+
 export async function handleHealthRequest(request) {
   const state = getState();
   const requestId = randomUUID();
@@ -134,7 +189,8 @@ export async function handleHealthRequest(request) {
     mode: "passive-public-scan",
     uptimeSec: Math.round((Date.now() - state.bootedAt) / 1000),
     activeScans: state.concurrencyGuard.size(),
-    cacheEntries: state.cache.size()
+    cacheEntries: state.cache.size(),
+    metricsBackend: state.metrics.backend || "memory"
   });
 }
 
@@ -182,21 +238,26 @@ export async function handleScanRequest(request) {
   }
 
   const startedAt = Date.now();
+  let hostnameHint = "";
 
   try {
     const body = await readJsonBody(request);
     const cacheKey = typeof body.url === "string" ? body.url.trim() : "";
+    hostnameHint = extractHostname(cacheKey);
     const cachedPayload = cacheKey ? state.cache.get(cacheKey) : null;
 
     if (cachedPayload) {
-      return jsonResponse(request, requestId, 200, {
+      const payload = {
         ...structuredClone(cachedPayload),
         meta: {
           cached: true,
           durationMs: 0,
           requestId
         }
-      }, rateHeaders);
+      };
+
+      await recordMetricSilently(state.metrics, "recordScan", toScanMetric(payload, hostnameHint, requestId, 0, true));
+      return jsonResponse(request, requestId, 200, payload, rateHeaders);
     }
 
     const result = await scanTarget(body.url);
@@ -213,11 +274,23 @@ export async function handleScanRequest(request) {
       state.cache.set(cacheKey, payload);
     }
 
+    await recordMetricSilently(
+      state.metrics,
+      "recordScan",
+      toScanMetric(payload, hostnameHint, requestId, payload.meta.durationMs, false)
+    );
+
     return jsonResponse(request, requestId, 200, payload, rateHeaders);
   } catch (error) {
     const statusCode = error instanceof ScanError ? error.statusCode : 500;
     const code = error instanceof ScanError ? error.code : "INTERNAL_ERROR";
     const message = error instanceof ScanError ? error.message : "Unexpected server error.";
+
+    await recordMetricSilently(
+      state.metrics,
+      "recordScan",
+      toScanFailureMetric(hostnameHint, requestId, Date.now() - startedAt, code)
+    );
 
     return jsonResponse(request, requestId, statusCode, {
       ok: false,
@@ -229,4 +302,156 @@ export async function handleScanRequest(request) {
   } finally {
     state.concurrencyGuard.leave();
   }
+}
+
+export async function handleVisitRequest(request) {
+  const state = getState();
+  const requestId = randomUUID();
+
+  if (request.method !== "POST") {
+    return jsonResponse(request, requestId, 405, {
+      ok: false,
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: "Method not allowed."
+      }
+    });
+  }
+
+  const visitor = ensureVisitorCookie(request);
+  const body = await readJsonBody(request);
+
+  await state.metrics.recordVisit({
+    path: typeof body.path === "string" ? body.path : "/",
+    visitorId: visitor.visitorId
+  });
+
+  return jsonResponse(request, requestId, 200, {
+    ok: true,
+    tracked: true
+  }, visitor.setCookie ? { "Set-Cookie": visitor.setCookie } : {});
+}
+
+export async function handleAdminLoginRequest(request) {
+  const requestId = randomUUID();
+
+  if (request.method !== "POST") {
+    return jsonResponse(request, requestId, 405, {
+      ok: false,
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: "Method not allowed."
+      }
+    });
+  }
+
+  if (!isAdminConfigured()) {
+    return jsonResponse(request, requestId, 503, {
+      ok: false,
+      error: {
+        code: "ADMIN_NOT_CONFIGURED",
+        message: "Admin access is not configured yet."
+      }
+    });
+  }
+
+  const body = await readJsonBody(request);
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const password = typeof body.password === "string" ? body.password : "";
+
+  if (!verifyAdminCredentials(username, password)) {
+    return jsonResponse(request, requestId, 401, {
+      ok: false,
+      error: {
+        code: "ADMIN_AUTH_FAILED",
+        message: "Incorrect administrator credentials."
+      }
+    });
+  }
+
+  return jsonResponse(request, requestId, 200, {
+    ok: true,
+    admin: {
+      username
+    }
+  }, {
+    "Set-Cookie": createAdminSessionCookie(request, username)
+  });
+}
+
+export async function handleAdminLogoutRequest(request) {
+  const requestId = randomUUID();
+
+  if (request.method !== "POST") {
+    return jsonResponse(request, requestId, 405, {
+      ok: false,
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: "Method not allowed."
+      }
+    });
+  }
+
+  return jsonResponse(request, requestId, 200, { ok: true }, {
+    "Set-Cookie": clearAdminSessionCookie(request)
+  });
+}
+
+export async function handleAdminSessionRequest(request) {
+  const requestId = randomUUID();
+  const session = readAdminSession(request);
+
+  return jsonResponse(request, requestId, 200, {
+    ok: true,
+    admin: {
+      authenticated: Boolean(session),
+      configured: isAdminConfigured(),
+      username: session?.username || null
+    }
+  });
+}
+
+export async function handleAdminMetricsRequest(request) {
+  const state = getState();
+  const requestId = randomUUID();
+
+  if (request.method !== "GET") {
+    return jsonResponse(request, requestId, 405, {
+      ok: false,
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: "Method not allowed."
+      }
+    });
+  }
+
+  if (!isAdminConfigured()) {
+    return jsonResponse(request, requestId, 503, {
+      ok: false,
+      error: {
+        code: "ADMIN_NOT_CONFIGURED",
+        message: "Admin access is not configured yet."
+      }
+    });
+  }
+
+  const session = readAdminSession(request);
+  if (!session) {
+    return jsonResponse(request, requestId, 401, {
+      ok: false,
+      error: {
+        code: "ADMIN_AUTH_REQUIRED",
+        message: "Administrator login is required."
+      }
+    });
+  }
+
+  const snapshot = await state.metrics.getSnapshot();
+  return jsonResponse(request, requestId, 200, {
+    ok: true,
+    admin: {
+      username: session.username
+    },
+    metrics: snapshot
+  });
 }
