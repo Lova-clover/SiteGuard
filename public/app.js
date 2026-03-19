@@ -405,8 +405,7 @@ function renderDecision(decision, summary, findings, checks, strengths, primaryF
   }
 
   if (elements.decisionSummary) {
-    const headline = summary.headline ? `${summary.headline} ` : "";
-    elements.decisionSummary.textContent = `${headline}${decision.summary}`.trim();
+    elements.decisionSummary.textContent = buildDecisionNarrative(decision, findings, primaryFocus);
   }
 
   if (elements.deployBadge) {
@@ -415,7 +414,7 @@ function renderDecision(decision, summary, findings, checks, strengths, primaryF
   }
 
   if (elements.focusBadge) {
-    elements.focusBadge.textContent = `가장 먼저: ${primaryFocus}`;
+    elements.focusBadge.textContent = findings.length ? `우선 확인: ${primaryFocus}` : "우선 확인 없음";
   }
 
   if (elements.priorityImmediate) {
@@ -433,6 +432,22 @@ function renderDecision(decision, summary, findings, checks, strengths, primaryF
   if (elements.priorityEvidence) {
     elements.priorityEvidence.textContent = `${checks.length}개`;
   }
+}
+
+function buildDecisionNarrative(decision, findings, primaryFocus) {
+  if (!findings.length) {
+    return decision.summary;
+  }
+
+  if (decision.tone === "good") {
+    return `즉시 위험은 낮지만, ${primaryFocus} 항목은 다음 점검 전까지 정리해 두는 편이 좋습니다.`;
+  }
+
+  if (decision.tone === "warning") {
+    return `가장 먼저 볼 항목은 ${primaryFocus}입니다. 영향이 큰 순서대로 정리하면 공개 상태를 더 안정적으로 유지할 수 있습니다.`;
+  }
+
+  return `가장 먼저 볼 항목은 ${primaryFocus}입니다. 이 항목부터 정리한 뒤 나머지 문제를 이어서 확인해 주세요.`;
 }
 
 function renderSnapshot(summary, counts, checks) {

@@ -265,6 +265,8 @@ body {
   line-height: 1.1;
   letter-spacing: -0.03em;
   margin-bottom: 1.5rem;
+  display: grid;
+  gap: 0.15em;
 }
 
 .hero-title span {
@@ -274,6 +276,8 @@ body {
   -webkit-text-fill-color: transparent;
   background-clip: text;
   animation: gradient-shift 4s ease infinite;
+  display: block;
+  text-wrap: balance;
 }
 
 .hero-desc {
@@ -660,6 +664,12 @@ body {
 .results-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.9fr);
+  grid-template-areas:
+    "decision decision"
+    "actions snapshot"
+    "findings strengths"
+    "checks checks"
+    "evidence evidence";
   gap: 1.5rem;
 }
 
@@ -712,7 +722,7 @@ body {
 
 /* Decision Panel */
 .decision-panel {
-  grid-column: 1 / -1;
+  grid-area: decision;
   padding: 2rem;
   background:
     radial-gradient(circle at top right, rgba(102, 126, 234, 0.12), transparent 28%),
@@ -929,7 +939,7 @@ body {
 
 /* Snapshot Panel */
 .snapshot-panel {
-  grid-column: 2;
+  grid-area: snapshot;
 }
 
 .snapshot-grid {
@@ -969,7 +979,7 @@ body {
 
 /* Actions Panel */
 .actions-panel {
-  grid-column: 1;
+  grid-area: actions;
 }
 
 .actions-list {
@@ -1100,7 +1110,7 @@ body {
 
 /* Strengths Panel */
 .strengths-panel {
-  grid-column: 2;
+  grid-area: strengths;
 }
 
 .strengths-list {
@@ -1145,7 +1155,7 @@ body {
 
 /* Findings Panel */
 .findings-panel {
-  grid-column: 1;
+  grid-area: findings;
 }
 
 .findings-list.grouped {
@@ -1276,7 +1286,7 @@ body {
 
 /* Checks Panel */
 .checks-panel {
-  grid-column: 1 / -1;
+  grid-area: checks;
 }
 
 .checks-grid {
@@ -1337,7 +1347,7 @@ body {
 
 /* Details Panel */
 .evidence-panel {
-  grid-column: 1 / -1;
+  grid-area: evidence;
 }
 
 .evidence-stack {
@@ -1728,16 +1738,18 @@ details[open] .details-summary::after {
 @media (max-width: 1200px) {
   .results-grid {
     grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-areas:
+      "decision decision"
+      "actions snapshot"
+      "findings strengths"
+      "checks checks"
+      "evidence evidence";
   }
   .decision-primary {
     grid-template-columns: 1fr;
   }
   .decision-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .snapshot-panel,
-  .strengths-panel {
-    grid-column: 2;
   }
   .action-detail-row,
   .finding-grid {
@@ -1755,19 +1767,23 @@ details[open] .details-summary::after {
   .hero-title { font-size: 3rem; }
   .hero-desc { margin: 0 auto; }
   .features-grid { grid-template-columns: repeat(2, 1fr); }
-  .results-grid { grid-template-columns: 1fr; }
+  .results-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "decision"
+      "actions"
+      "snapshot"
+      "strengths"
+      "findings"
+      "checks"
+      "evidence";
+  }
   .decision-score {
     flex-direction: column;
     align-items: flex-start;
   }
   .decision-metrics {
     grid-template-columns: 1fr;
-  }
-  .actions-panel,
-  .snapshot-panel,
-  .strengths-panel,
-  .findings-panel {
-    grid-column: 1;
   }
   .tls-grid { grid-template-columns: repeat(2, 1fr); }
 }
