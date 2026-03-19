@@ -25,6 +25,30 @@ const SEVERITY_ORDER = {
   low: 3
 };
 
+const FINDING_CATEGORY_ORDER = {
+  direct: 0,
+  hardening: 1,
+  maturity: 2
+};
+
+const WARN_CREDIT_RATIO = 0.65;
+
+const SENSITIVE_COOKIE_NAME_PATTERN = /(^|[-_])(?:auth|csrf|id|identity|jwt|login|refresh|session|sid|state|token|user)(?:$|[-_])/i;
+
+const MIXED_CONTENT_ATTRIBUTES = new Map([
+  ["audio", ["src"]],
+  ["embed", ["src"]],
+  ["iframe", ["src"]],
+  ["img", ["src", "srcset"]],
+  ["input", ["src"]],
+  ["link", ["href"]],
+  ["object", ["data"]],
+  ["script", ["src"]],
+  ["source", ["src", "srcset"]],
+  ["track", ["src"]],
+  ["video", ["poster", "src"]]
+]);
+
 export class ScanError extends Error {
   constructor(message, { code = "SCAN_ERROR", statusCode = 400 } = {}) {
     super(message);
@@ -837,6 +861,64 @@ function parseCookies(headerValue) {
   });
 }
 
+function isLikelySensitiveCookie(cookie) {
+  const name = String(cookie?.name || "");
+  return name.startsWith("__Host-")
+    || SENSITIVE_COOKIE_NAME_PATTERN.test(name);
+}
+
+function assessCookieHardening(cookies) {
+  if (!cookies.length) {
+    return {
+      applicable: false,
+      category: "hardening",
+      insecureCookies: [],
+      insecureSensitiveCookies: [],
+      likelySensitiveCookies: [],
+      severity: null,
+      status: "na"
+    };
+  }
+
+  const insecureCookies = cookies.filter((cookie) => !cookie.secure || !cookie.httpOnly || !cookie.sameSite);
+  const likelySensitiveCookies = cookies.filter(isLikelySensitiveCookie);
+  const insecureSensitiveCookies = likelySensitiveCookies.filter((cookie) => !cookie.secure || !cookie.httpOnly);
+
+  if (!insecureCookies.length) {
+    return {
+      applicable: true,
+      category: "hardening",
+      insecureCookies,
+      insecureSensitiveCookies,
+      likelySensitiveCookies,
+      severity: null,
+      status: "pass"
+    };
+  }
+
+  if (insecureSensitiveCookies.length > 0) {
+    return {
+      applicable: true,
+      category: "direct",
+      insecureCookies,
+      insecureSensitiveCookies,
+      likelySensitiveCookies,
+      severity: "high",
+      status: "fail"
+    };
+  }
+
+  return {
+    applicable: true,
+    category: "hardening",
+    insecureCookies,
+    insecureSensitiveCookies,
+    likelySensitiveCookies,
+    severity: insecureCookies.length >= Math.max(2, Math.ceil(cookies.length / 2)) ? "medium" : "low",
+    status: "warn"
+  };
+}
+
 function inspectHtmlDocument(body, finalUrl, contentType) {
   const isHtml = contentType.startsWith("text/html") || /<html[\s>]/i.test(body) || /<!doctype html/i.test(body);
 
@@ -881,10 +963,10 @@ function inspectHtmlDocument(body, finalUrl, contentType) {
       }
     }
 
-    if (finalUrlObject?.protocol === "https:") {
-      for (const attributeName of ["src", "href", "action"]) {
+    if (finalUrlObject?.protocol === "https:" && isMixedContentNode(node)) {
+      for (const attributeName of MIXED_CONTENT_ATTRIBUTES.get(tagName) || []) {
         const value = getHtmlAttribute(node, attributeName);
-        if (value && value.trim().toLowerCase().startsWith("http://")) {
+        if (isInsecureSubresourceReference(value, tagName, attributeName, node)) {
           mixedContentCount += 1;
         }
       }
@@ -979,6 +1061,37 @@ function formContainsPasswordField(node) {
   });
 
   return hasPasswordField;
+}
+
+function isMixedContentNode(node) {
+  const tagName = String(node?.tagName || "").toLowerCase();
+  return MIXED_CONTENT_ATTRIBUTES.has(tagName);
+}
+
+function isInsecureSubresourceReference(value, tagName, attributeName, node) {
+  if (!value) {
+    return false;
+  }
+
+  const normalizedValue = String(value).trim().toLowerCase();
+
+  if (attributeName === "srcset") {
+    return normalizedValue
+      .split(",")
+      .map((entry) => entry.trim().split(/\s+/)[0])
+      .some((candidate) => candidate.startsWith("http://"));
+  }
+
+  if (!normalizedValue.startsWith("http://")) {
+    return false;
+  }
+
+  if (tagName !== "link" || attributeName !== "href") {
+    return true;
+  }
+
+  const rel = (getHtmlAttribute(node, "rel") || "").toLowerCase();
+  return /(?:^|\s)(?:stylesheet|preload|modulepreload|icon|mask-icon|apple-touch-icon|manifest)(?:\s|$)/.test(rel);
 }
 
 async function inspectSecurityTxt(finalUrl) {
@@ -1098,10 +1211,12 @@ function decodeHtmlEntities(value) {
     .replaceAll("&nbsp;", " ");
 }
 
+
 function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securityTxt }) {
   const findings = [];
   const httpsAvailable = httpsProbe.success;
   const httpRedirectsToHttps = httpProbe.success && httpProbe.result.finalUrl.startsWith("https://");
+  const cookieAssessment = assessCookieHardening(analysis.cookies);
 
   if (!httpsAvailable) {
     findings.push(createFinding(
@@ -1109,17 +1224,19 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
       "critical",
       "HTTPS가 제공되지 않습니다",
       "공개 웹사이트는 기본적으로 HTTPS를 제공해야 합니다.",
-      "HTTPS 응답을 확인하지 못했습니다."
+      "HTTPS 응답을 확인하지 못했습니다.",
+      { category: "direct" }
     ));
   }
 
-  if (httpProbe.success && !httpRedirectsToHttps) {
+  if (httpsAvailable && httpProbe.success && !httpRedirectsToHttps) {
     findings.push(createFinding(
       "no_https_redirect",
-      "high",
+      "medium",
       "HTTP 진입점이 HTTPS로 강제되지 않습니다",
-      "사용자가 평문 HTTP에 머물 수 있습니다.",
-      `최종 HTTP URL: ${httpProbe.result.finalUrl}`
+      "브라우저가 자동으로 업그레이드하지 못하는 환경에서는 평문 HTTP에 머물 수 있습니다.",
+      "최종 HTTP URL: " + httpProbe.result.finalUrl,
+      { category: "hardening" }
     ));
   }
 
@@ -1127,98 +1244,110 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
     findings.push(createFinding(
       "invalid_tls_cert",
       "critical",
-      "TLS 인증서가 신뢰되지 않습니다",
-      "브라우저 경고 또는 인증서 검증 실패가 발생할 수 있습니다.",
-      finalResponse.tls?.authorizationError || "인증서 검증에 실패했습니다."
+      "TLS 인증서 검증이 실패합니다",
+      "브라우저 경고나 인증서 검증 실패가 발생할 수 있습니다.",
+      finalResponse.tls?.authorizationError || "인증서 검증에 실패했습니다.",
+      { category: "direct" }
     ));
   }
 
   if (analysis.tls.applicable && analysis.tls.isExpiringSoon) {
     findings.push(createFinding(
       "expiring_tls_cert",
-      "medium",
+      "low",
       "TLS 인증서가 곧 만료됩니다",
-      "만료 전에 갱신 자동화를 점검하는 것이 좋습니다.",
-      `${analysis.tls.daysUntilExpiry}일 남음`
+      "만료 전에 인증서 갱신 자동화와 운영 절차를 점검하는 편이 좋습니다.",
+      String(analysis.tls.daysUntilExpiry) + "일 남음",
+      { category: "hardening" }
     ));
   }
 
   if (httpsAvailable && !analysis.hsts.enabled) {
     findings.push(createFinding(
       "missing_hsts",
-      "high",
+      "medium",
       "HSTS가 설정되어 있지 않습니다",
-      "브라우저가 HTTPS 강제를 기억하지 못합니다.",
-      "Strict-Transport-Security 헤더가 없습니다."
+      "HTTPS를 사용하더라도 브라우저가 강제 HTTPS를 기억하지 못합니다.",
+      "Strict-Transport-Security 헤더가 없습니다.",
+      { category: "hardening" }
     ));
   }
 
   if (analysis.hsts.enabled && !analysis.hsts.strong) {
     findings.push(createFinding(
       "weak_hsts",
-      "medium",
+      "low",
       "HSTS max-age가 충분히 길지 않습니다",
-      "짧은 max-age는 강제 HTTPS 효과를 약하게 만듭니다.",
-      `max-age=${analysis.hsts.maxAge}`
+      "짧은 max-age는 HTTPS 강제 효과를 약하게 만들 수 있습니다.",
+      "max-age=" + analysis.hsts.maxAge,
+      { category: "hardening" }
     ));
   }
 
   if (analysis.isHtml && !analysis.csp.enabled) {
     findings.push(createFinding(
       "missing_csp",
-      "high",
+      "medium",
       "CSP가 설정되어 있지 않습니다",
-      "XSS와 악성 리소스 로딩 피해를 줄일 방어선이 없습니다.",
-      "Content-Security-Policy 헤더가 없습니다."
+      "CSP는 스크립트 주입과 악성 리소스 로딩 피해 범위를 줄이는 데 도움이 됩니다.",
+      "Content-Security-Policy 헤더가 없습니다.",
+      { category: "hardening" }
     ));
   }
 
   if (analysis.csp.enabled && analysis.csp.weak) {
     findings.push(createFinding(
       "weak_csp",
-      "medium",
+      "low",
       "CSP가 느슨하게 구성되어 있습니다",
-      "unsafe-inline, unsafe-eval 또는 와일드카드가 포함되어 있습니다.",
-      normalizeHeaderText(finalResponse.headers["content-security-policy"])
+      "unsafe-inline, unsafe-eval 또는 와일드카드는 CSP 보호 효과를 크게 약화시킬 수 있습니다.",
+      normalizeHeaderText(finalResponse.headers["content-security-policy"]),
+      { category: "hardening" }
     ));
   }
 
-  const hasFrameProtection = Boolean(analysis.xFrameOptions) || /frame-ancestors/i.test(normalizeHeaderText(finalResponse.headers["content-security-policy"]));
+  const hasFrameProtection = Boolean(analysis.xFrameOptions)
+    || /frame-ancestors/i.test(normalizeHeaderText(finalResponse.headers["content-security-policy"]));
+
   if (analysis.isHtml && !hasFrameProtection) {
     findings.push(createFinding(
       "missing_frame_protection",
       "medium",
       "클릭재킹 방어가 보이지 않습니다",
-      "X-Frame-Options 또는 frame-ancestors가 필요합니다.",
-      "X-Frame-Options와 CSP frame-ancestors가 모두 없습니다."
+      "frame-ancestors 또는 X-Frame-Options가 없으면 클릭재킹 대응이 약해질 수 있습니다.",
+      "X-Frame-Options와 CSP frame-ancestors가 모두 없습니다.",
+      { category: "hardening" }
     ));
   }
 
   if (!/nosniff/i.test(normalizeHeaderText(finalResponse.headers["x-content-type-options"]))) {
     findings.push(createFinding(
       "missing_nosniff",
-      "medium",
+      "low",
       "X-Content-Type-Options: nosniff가 없습니다",
       "브라우저의 MIME sniffing을 제한하지 못합니다.",
-      "X-Content-Type-Options 헤더가 없습니다."
+      "X-Content-Type-Options 헤더가 없습니다.",
+      { category: "hardening" }
     ));
   }
 
   if (!analysis.referrerPolicy.defined) {
     findings.push(createFinding(
       "missing_referrer_policy",
-      "medium",
+      "low",
       "Referrer-Policy가 없습니다",
-      "외부 사이트로 전달되는 참조 정보 범위를 명시하지 않습니다.",
-      "Referrer-Policy 헤더가 없습니다."
+      "외부로 전달되는 참조 정보 범위를 명시하지 않습니다.",
+      "Referrer-Policy 헤더가 없습니다.",
+      { category: "hardening" }
     ));
   } else if (analysis.referrerPolicy.weak) {
     findings.push(createFinding(
       "weak_referrer_policy",
       "low",
       "Referrer-Policy가 다소 느슨합니다",
-      "더 보수적인 정책으로 정보 노출을 줄일 수 있습니다.",
-      analysis.referrerPolicy.value
+      "더 보수적인 정책을 쓰면 외부로 전달되는 URL 정보를 줄일 수 있습니다.",
+      analysis.referrerPolicy.value,
+      { category: "hardening" }
     ));
   }
 
@@ -1228,18 +1357,23 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
       "low",
       "Permissions-Policy가 없습니다",
       "브라우저 기능 접근을 더 세밀하게 제한할 수 있습니다.",
-      "Permissions-Policy 헤더가 없습니다."
+      "Permissions-Policy 헤더가 없습니다.",
+      { category: "maturity" }
     ));
   }
 
-  const insecureCookies = analysis.cookies.filter((cookie) => !cookie.secure || !cookie.httpOnly || !cookie.sameSite);
-  if (insecureCookies.length) {
+  if (cookieAssessment.insecureCookies.length) {
     findings.push(createFinding(
       "insecure_cookie",
-      "high",
+      cookieAssessment.severity,
       "쿠키 보안 속성이 충분하지 않습니다",
-      "민감한 쿠키는 Secure, HttpOnly, SameSite를 함께 검토해야 합니다.",
-      insecureCookies.map((cookie) => `${cookie.name}: secure=${cookie.secure}, httpOnly=${cookie.httpOnly}, sameSite=${cookie.sameSite || "없음"}`).join(" | ")
+      cookieAssessment.category === "direct"
+        ? "세션 성격의 쿠키는 Secure와 HttpOnly를 빠뜨리면 탈취 위험이 커질 수 있습니다."
+        : "쿠키 속성 보강이 필요하지만, 바로 치명 취약점으로 단정하기보다 용도와 노출 범위를 함께 보는 편이 좋습니다.",
+      cookieAssessment.insecureCookies
+        .map((cookie) => cookie.name + ": secure=" + cookie.secure + ", httpOnly=" + cookie.httpOnly + ", sameSite=" + (cookie.sameSite || "없음"))
+        .join(" | "),
+      { category: cookieAssessment.category }
     ));
   }
 
@@ -1248,8 +1382,11 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
       "permissive_cors",
       analysis.cors.wildcardWithCredentials ? "high" : "medium",
       "CORS 정책이 과하게 열려 있을 수 있습니다",
-      "필요한 출처만 허용하는 편이 안전합니다.",
-      `Access-Control-Allow-Origin=${normalizeHeaderText(finalResponse.headers["access-control-allow-origin"])}, Access-Control-Allow-Credentials=${normalizeHeaderText(finalResponse.headers["access-control-allow-credentials"])}`
+      analysis.cors.wildcardWithCredentials
+        ? "Credentials와 wildcard를 함께 허용하면 교차 출처 요청 위험이 커질 수 있습니다."
+        : "필요한 출처만 허용하는 편이 안전합니다.",
+      "Access-Control-Allow-Origin=" + normalizeHeaderText(finalResponse.headers["access-control-allow-origin"]) + ", Access-Control-Allow-Credentials=" + normalizeHeaderText(finalResponse.headers["access-control-allow-credentials"]),
+      { category: analysis.cors.wildcardWithCredentials ? "direct" : "hardening" }
     ));
   }
 
@@ -1258,8 +1395,9 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
       "stack_header_exposed",
       "low",
       "기술 스택 정보가 노출됩니다",
-      "버전과 프레임워크 단서는 공격자에게 유용한 힌트가 될 수 있습니다.",
-      `Server=${analysis.exposure.server || "없음"}, X-Powered-By=${analysis.exposure.poweredBy || "없음"}`
+      "버전과 프레임워크 단서가 공격자에게 유용한 힌트가 될 수 있습니다.",
+      "Server=" + (analysis.exposure.server || "없음") + ", X-Powered-By=" + (analysis.exposure.poweredBy || "없음"),
+      { category: "maturity" }
     ));
   }
 
@@ -1268,8 +1406,9 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
       "mixed_content",
       "high",
       "HTTPS 페이지에 혼합 콘텐츠가 보입니다",
-      "HTTP 리소스가 포함되면 경고나 변조 위험이 생길 수 있습니다.",
-      `HTTP 리소스 참조 ${analysis.htmlSignals.mixedContentCount}개`
+      "HTTP 리소스가 섞이면 경고나 변조 위험이 생길 수 있습니다.",
+      "HTTP 리소스 참조 " + analysis.htmlSignals.mixedContentCount + "개",
+      { category: "direct" }
     ));
   }
 
@@ -1278,8 +1417,9 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
       "insecure_login_form",
       "high",
       "로그인 폼 전송 방식이 안전하지 않을 수 있습니다",
-      "비밀번호는 POST + HTTPS 조합으로만 전송되어야 합니다.",
-      `의심되는 비밀번호 폼 ${analysis.htmlSignals.insecureLoginFormCount}개`
+      "비밀번호 전송은 POST와 HTTPS 조합으로 제한하는 편이 좋습니다.",
+      "전달되는 비밀번호 폼 " + analysis.htmlSignals.insecureLoginFormCount + "개",
+      { category: "direct" }
     ));
   }
 
@@ -1288,33 +1428,37 @@ function buildFindings({ analysis, finalResponse, httpProbe, httpsProbe, securit
       "missing_security_txt",
       "low",
       "security.txt가 공개되어 있지 않습니다",
-      "보안 제보 연락 경로가 공개되어 있지 않아 외부 연구자나 파트너가 책임 있게 연락하기 어렵습니다.",
-      `확인 위치: ${securityTxt.scannedUrl}`
+      "외부 제보자와 파트너가 책임 있게 연락할 수 있는 채널을 보여주면 대응 흐름이 좋아집니다.",
+      "확인 위치: " + securityTxt.scannedUrl,
+      { category: "maturity" }
     ));
   } else if (!analysis.securityTxt.hasContact || !analysis.securityTxt.hasExpires) {
     findings.push(createFinding(
       "incomplete_security_txt",
       "low",
       "security.txt 정보가 충분하지 않습니다",
-      "security.txt가 있더라도 Contact와 Expires가 비어 있으면 운영 신뢰와 제보 흐름이 약해집니다.",
-      `contact=${securityTxt.contact || "없음"}, expires=${securityTxt.expires || "없음"}`
+      "Contact와 Expires가 없으면 제보 채널과 운영 기준이 흐려질 수 있습니다.",
+      "contact=" + (securityTxt.contact || "없음") + ", expires=" + (securityTxt.expires || "없음"),
+      { category: "maturity" }
     ));
   } else if (analysis.securityTxt.isExpired) {
     findings.push(createFinding(
       "stale_security_txt",
       "low",
-      "security.txt의 만료 정보가 지났습니다",
-      "만료된 security.txt는 현재도 유효한 보안 제보 채널인지 판단하기 어렵게 만듭니다.",
-      `expires=${securityTxt.expires}`
+      "security.txt가 만료되었습니다",
+      "만료된 security.txt는 현재도 유효한 제보 채널인지 판단하기 어렵게 만듭니다.",
+      "expires=" + securityTxt.expires,
+      { category: "maturity" }
     ));
   }
 
   return findings;
 }
 
-function createFinding(id, severity, title, summary, evidence) {
+function createFinding(id, severity, title, summary, evidence, metadata = {}) {
   return {
     id,
+    category: metadata.category || "hardening",
     severity,
     title,
     summary,
@@ -1324,10 +1468,16 @@ function createFinding(id, severity, title, summary, evidence) {
 
 function sortFindings(findings) {
   return [...findings].sort((left, right) => {
+    const categoryDiff = (FINDING_CATEGORY_ORDER[left.category] ?? 99) - (FINDING_CATEGORY_ORDER[right.category] ?? 99);
+    if (categoryDiff !== 0) {
+      return categoryDiff;
+    }
+
     const severityDiff = SEVERITY_ORDER[left.severity] - SEVERITY_ORDER[right.severity];
     if (severityDiff !== 0) {
       return severityDiff;
     }
+
     return left.title.localeCompare(right.title, "ko");
   });
 }
@@ -1336,45 +1486,32 @@ function buildChecks({ analysis, findings, finalResponse, httpProbe, httpsProbe,
   const findingIds = new Set(findings.map((finding) => finding.id));
   const httpsAvailable = httpsProbe.success;
   const httpRedirectsToHttps = httpProbe.success && httpProbe.result.finalUrl.startsWith("https://");
-  const hasFrameProtection = Boolean(analysis.xFrameOptions) || /frame-ancestors/i.test(normalizeHeaderText(finalResponse.headers["content-security-policy"]));
-  const insecureCookies = analysis.cookies.filter((cookie) => !cookie.secure || !cookie.httpOnly || !cookie.sameSite);
+  const hasFrameProtection = Boolean(analysis.xFrameOptions)
+    || /frame-ancestors/i.test(normalizeHeaderText(finalResponse.headers["content-security-policy"]));
+  const cookieAssessment = assessCookieHardening(analysis.cookies);
 
   return [
     makeCheck("https_support", "HTTPS 지원", 16, httpsAvailable ? "pass" : "fail", httpsAvailable ? "HTTPS 응답 확인됨" : "HTTPS 응답 없음"),
-    makeCheck("https_redirect", "HTTP -> HTTPS 리다이렉트", 8, httpProbe.success ? (httpRedirectsToHttps ? "pass" : "fail") : "warn", httpProbe.success ? httpProbe.result.finalUrl : "HTTP 응답을 확인하지 못했습니다."),
-    makeCheck("tls_validity", "TLS 인증서 상태", 10, !analysis.tls.applicable ? "na" : !analysis.tls.isValid ? "fail" : analysis.tls.hasTrustChainWarning || analysis.tls.isExpiringSoon ? "warn" : "pass", analysis.tls.applicable ? `${finalResponse.tls?.authorizationError || "정상"}${analysis.tls.daysUntilExpiry != null ? `, ${analysis.tls.daysUntilExpiry}일 후 만료` : ""}` : "HTTPS 미지원"),
-    makeCheck("hsts", "HSTS", 10, !httpsAvailable ? "na" : !analysis.hsts.enabled ? "fail" : analysis.hsts.strong ? "pass" : "warn", !httpsAvailable ? "HTTPS 미지원" : analysis.hsts.enabled ? `max-age=${analysis.hsts.maxAge}` : "헤더 없음"),
-    makeCheck("csp", "Content-Security-Policy", 12, !analysis.isHtml ? "na" : !analysis.csp.enabled ? "fail" : analysis.csp.weak ? "warn" : "pass", analysis.isHtml ? (normalizeHeaderText(finalResponse.headers["content-security-policy"]) || "헤더 없음") : "HTML 응답 아님"),
-    makeCheck("frame_protection", "클릭재킹 방어", 8, !analysis.isHtml ? "na" : hasFrameProtection ? "pass" : "fail", analysis.isHtml ? (hasFrameProtection ? normalizeHeaderText(finalResponse.headers["x-frame-options"]) || "CSP frame-ancestors 확인됨" : "없음") : "HTML 응답 아님"),
-    makeCheck("nosniff", "nosniff", 6, findingIds.has("missing_nosniff") ? "fail" : "pass", normalizeHeaderText(finalResponse.headers["x-content-type-options"]) || "헤더 없음"),
-    makeCheck("referrer_policy", "Referrer-Policy", 5, !analysis.referrerPolicy.defined ? "fail" : analysis.referrerPolicy.weak ? "warn" : "pass", analysis.referrerPolicy.value || "헤더 없음"),
-    makeCheck("permissions_policy", "Permissions-Policy", 4, normalizeHeaderText(finalResponse.headers["permissions-policy"]) ? "pass" : "fail", normalizeHeaderText(finalResponse.headers["permissions-policy"]) || "헤더 없음"),
-    makeCheck("cookie_hardening", "쿠키 보안 속성", 10, analysis.cookies.length === 0 ? "na" : insecureCookies.length ? "fail" : "pass", analysis.cookies.length ? `보완 필요한 쿠키 ${insecureCookies.length}/${analysis.cookies.length}개` : "Set-Cookie 헤더 없음"),
-    makeCheck("cors", "CORS 구성", 5, !analysis.cors.configured ? "na" : analysis.cors.wildcardWithCredentials ? "fail" : analysis.cors.permissive ? "warn" : "pass", analysis.cors.configured ? `origin=${normalizeHeaderText(finalResponse.headers["access-control-allow-origin"])}` : "CORS 헤더 없음"),
-    makeCheck("stack_exposure", "기술 스택 노출", 3, analysis.exposure.verbose ? "warn" : "pass", `Server=${analysis.exposure.server || "없음"}, X-Powered-By=${analysis.exposure.poweredBy || "없음"}`),
-    makeCheck("mixed_content", "혼합 콘텐츠", 2, !analysis.isHtml ? "na" : analysis.htmlSignals.mixedContentCount > 0 ? "fail" : "pass", analysis.isHtml ? `안전하지 않은 참조 ${analysis.htmlSignals.mixedContentCount}개` : "HTML 응답 아님"),
-    makeCheck("login_form_transport", "로그인 폼 전송 안전성", 1, !analysis.isHtml ? "na" : analysis.htmlSignals.insecureLoginFormCount > 0 ? "fail" : "pass", analysis.isHtml ? `의심되는 비밀번호 폼 ${analysis.htmlSignals.insecureLoginFormCount}개` : "HTML 응답 아님"),
-    makeCheck(
-      "security_txt",
-      "security.txt",
-      2,
-      !analysis.securityTxt.available
-        ? "warn"
-        : analysis.securityTxt.isExpired
-          ? "fail"
-          : (!analysis.securityTxt.hasContact || !analysis.securityTxt.hasExpires)
-            ? "warn"
-            : "pass",
-      !analysis.securityTxt.available
-        ? `확인 위치 ${securityTxt.scannedUrl}`
-        : `contact=${securityTxt.contact || "없음"}, expires=${securityTxt.expires || "없음"}`
-    )
+    makeCheck("https_redirect", "HTTP -> HTTPS 리다이렉트", 6, !httpsAvailable ? "na" : httpProbe.success ? (httpRedirectsToHttps ? "pass" : "warn") : "warn", httpProbe.success ? httpProbe.result.finalUrl : "HTTP 응답은 확인하지 못했습니다."),
+    makeCheck("tls_validity", "TLS 인증서 상태", 10, !analysis.tls.applicable ? "na" : !analysis.tls.isValid ? "fail" : analysis.tls.hasTrustChainWarning || analysis.tls.isExpiringSoon ? "warn" : "pass", analysis.tls.applicable ? (finalResponse.tls?.authorizationError || "정상") + (analysis.tls.daysUntilExpiry != null ? ", " + analysis.tls.daysUntilExpiry + "일 후 만료" : "") : "HTTPS 미적용"),
+    makeCheck("hsts", "HSTS", 8, !httpsAvailable ? "na" : !analysis.hsts.enabled ? "warn" : analysis.hsts.strong ? "pass" : "warn", !httpsAvailable ? "HTTPS 미적용" : analysis.hsts.enabled ? "max-age=" + analysis.hsts.maxAge : "헤더 없음"),
+    makeCheck("csp", "Content-Security-Policy", 10, !analysis.isHtml ? "na" : !analysis.csp.enabled ? "warn" : analysis.csp.weak ? "warn" : "pass", analysis.isHtml ? (normalizeHeaderText(finalResponse.headers["content-security-policy"]) || "헤더 없음") : "HTML 응답 아님"),
+    makeCheck("frame_protection", "클릭재킹 방어", 7, !analysis.isHtml ? "na" : hasFrameProtection ? "pass" : "warn", analysis.isHtml ? (hasFrameProtection ? normalizeHeaderText(finalResponse.headers["x-frame-options"]) || "CSP frame-ancestors 확인됨" : "없음") : "HTML 응답 아님"),
+    makeCheck("nosniff", "nosniff", 3, findingIds.has("missing_nosniff") ? "warn" : "pass", normalizeHeaderText(finalResponse.headers["x-content-type-options"]) || "헤더 없음"),
+    makeCheck("referrer_policy", "Referrer-Policy", 3, !analysis.referrerPolicy.defined ? "warn" : analysis.referrerPolicy.weak ? "warn" : "pass", analysis.referrerPolicy.value || "헤더 없음"),
+    makeCheck("permissions_policy", "Permissions-Policy", 1, normalizeHeaderText(finalResponse.headers["permissions-policy"]) ? "pass" : "warn", normalizeHeaderText(finalResponse.headers["permissions-policy"]) || "헤더 없음"),
+    makeCheck("cookie_hardening", "쿠키 보안 속성", 8, cookieAssessment.status, analysis.cookies.length ? "보완 필요한 쿠키 " + cookieAssessment.insecureCookies.length + "/" + analysis.cookies.length + "개" : "Set-Cookie 헤더 없음"),
+    makeCheck("cors", "CORS 구성", 5, !analysis.cors.configured ? "na" : analysis.cors.wildcardWithCredentials ? "fail" : analysis.cors.permissive ? "warn" : "pass", analysis.cors.configured ? "origin=" + normalizeHeaderText(finalResponse.headers["access-control-allow-origin"]) : "CORS 헤더 없음"),
+    makeCheck("stack_exposure", "기술 스택 노출", 1, analysis.exposure.verbose ? "warn" : "pass", "Server=" + (analysis.exposure.server || "없음") + ", X-Powered-By=" + (analysis.exposure.poweredBy || "없음")),
+    makeCheck("mixed_content", "혼합 콘텐츠", 7, !analysis.isHtml ? "na" : analysis.htmlSignals.mixedContentCount > 0 ? "fail" : "pass", analysis.isHtml ? "안전하지 않은 참조 " + analysis.htmlSignals.mixedContentCount + "개" : "HTML 응답 아님"),
+    makeCheck("login_form_transport", "로그인 폼 전송 안전성", 6, !analysis.isHtml ? "na" : analysis.htmlSignals.insecureLoginFormCount > 0 ? "fail" : "pass", analysis.isHtml ? "의심되는 비밀번호 폼 " + analysis.htmlSignals.insecureLoginFormCount + "개" : "HTML 응답 아님"),
+    makeCheck("security_txt", "security.txt", 1, !analysis.securityTxt.available ? "warn" : analysis.securityTxt.isExpired ? "warn" : (!analysis.securityTxt.hasContact || !analysis.securityTxt.hasExpires) ? "warn" : "pass", !analysis.securityTxt.available ? "확인 위치 " + securityTxt.scannedUrl : "contact=" + (securityTxt.contact || "없음") + ", expires=" + (securityTxt.expires || "없음"))
   ];
 }
-
 function makeCheck(id, label, weight, status, detail) {
   return { id, label, weight, status, detail };
 }
+
 
 function scoreChecks(checks) {
   let earned = 0;
@@ -1390,7 +1527,7 @@ function scoreChecks(checks) {
     if (check.status === "pass") {
       earned += check.weight;
     } else if (check.status === "warn") {
-      earned += check.weight * 0.5;
+      earned += check.weight * WARN_CREDIT_RATIO;
     }
   }
 
@@ -1403,7 +1540,6 @@ function scoreChecks(checks) {
     applicableWeight: possible
   };
 }
-
 function gradeForScore(score) {
   if (score >= 95) return "A+";
   if (score >= 90) return "A";
@@ -1420,6 +1556,7 @@ function riskLevelForScore(score) {
   return "Critical";
 }
 
+
 function buildSummary({ checks, findings, httpProbe, httpsProbe, score }) {
   const counts = {
     critical: findings.filter((finding) => finding.severity === "critical").length,
@@ -1432,16 +1569,40 @@ function buildSummary({ checks, findings, httpProbe, httpsProbe, score }) {
     )
   };
 
+  const categoryCounts = {
+    direct: findings.filter((finding) => finding.category === "direct").length,
+    hardening: findings.filter((finding) => finding.category === "hardening").length,
+    maturity: findings.filter((finding) => finding.category === "maturity").length,
+    directCritical: findings.filter((finding) => finding.category === "direct" && finding.severity === "critical").length,
+    directHigh: findings.filter((finding) => finding.category === "direct" && finding.severity === "high").length,
+    directMedium: findings.filter((finding) => finding.category === "direct" && finding.severity === "medium").length,
+    hardeningHigh: findings.filter((finding) => finding.category === "hardening" && finding.severity === "high").length,
+    hardeningMedium: findings.filter((finding) => finding.category === "hardening" && finding.severity === "medium").length
+  };
+
+  let riskLevel = score.riskLevel;
+
+  if (categoryCounts.directCritical > 0) {
+    riskLevel = "Critical";
+  } else if (categoryCounts.directHigh > 0) {
+    riskLevel = "High";
+  } else if (categoryCounts.directMedium > 0 || categoryCounts.hardeningHigh > 0 || categoryCounts.hardeningMedium >= 2) {
+    riskLevel = "Moderate";
+  } else if (riskLevel === "Critical" || riskLevel === "High") {
+    riskLevel = "Moderate";
+  }
+
   const headline = findings.length
-    ? `가장 먼저 볼 문제: ${findings[0].title}`
-    : "공개적으로 확인 가능한 기본 보안 항목은 대체로 양호합니다.";
+    ? "가장 먼저 볼 문제: " + findings[0].title
+    : "공개적으로 확인 가능한 핵심 보안 항목은 대체로 잘 갖춰져 있습니다.";
 
   return {
     score: score.value,
     grade: score.grade,
-    riskLevel: counts.critical > 0 ? "Critical" : counts.high > 1 ? "High" : score.riskLevel,
+    riskLevel,
     headline,
     counts,
+    categoryCounts,
     passes: checks.filter((check) => check.status === "pass").length,
     warnings: checks.filter((check) => check.status === "warn").length,
     failures: checks.filter((check) => check.status === "fail").length
@@ -1455,7 +1616,11 @@ export const __internals = {
   analyzeExposure,
   analyzeHsts,
   analyzeReferrerPolicy,
+  assessCookieHardening,
   assertResolvedSocketAddress,
+  buildChecks,
+  buildFindings,
+  buildSummary,
   createPinnedLookup,
   dedupeResolvedEntries,
   extractHtmlSignals,
@@ -1468,5 +1633,6 @@ export const __internals = {
   parseCookies,
   requestOnce,
   resolvePublicTarget,
-  scoreChecks
+  scoreChecks,
+  sortFindings
 };

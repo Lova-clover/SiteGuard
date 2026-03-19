@@ -178,6 +178,269 @@ test("inspectHtmlDocument parses metadata and ignores comment-based false positi
   assert.equal(result.insecureLoginFormCount, 0);
 });
 
+test("inspectHtmlDocument ignores plain http anchors when counting mixed content", () => {
+  const html = [
+    "<!doctype html>",
+    "<html>",
+    "<body>",
+    "<a href=\"http://example.com/help\">Help</a>",
+    "<link rel=\"stylesheet\" href=\"http://cdn.example.com/app.css\">",
+    "</body>",
+    "</html>"
+  ].join("");
+
+  const result = __internals.inspectHtmlDocument(
+    html,
+    "https://example.com/account",
+    "text/html; charset=utf-8"
+  );
+
+  assert.equal(result.mixedContentCount, 1);
+});
+
+test("assessCookieHardening separates sensitive session cookies from softer hardening gaps", () => {
+  const direct = __internals.assessCookieHardening([
+    {
+      name: "session_id",
+      secure: false,
+      httpOnly: false,
+      sameSite: null
+    }
+  ]);
+
+  assert.equal(direct.status, "fail");
+  assert.equal(direct.severity, "high");
+  assert.equal(direct.category, "direct");
+
+  const hardening = __internals.assessCookieHardening([
+    {
+      name: "NID",
+      secure: false,
+      httpOnly: true,
+      sameSite: null
+    },
+    {
+      name: "__Secure-BUCKET",
+      secure: true,
+      httpOnly: true,
+      sameSite: null
+    }
+  ]);
+
+  assert.equal(hardening.status, "warn");
+  assert.equal(hardening.severity, "medium");
+  assert.equal(hardening.category, "hardening");
+});
+
+test("buildSummary keeps hardening-only gaps at moderate risk instead of escalating to high", () => {
+  const finalResponse = {
+    headers: {},
+    tls: {
+      authorizationError: null
+    }
+  };
+  const analysis = {
+    cookies: [
+      {
+        name: "NID",
+        secure: false,
+        httpOnly: true,
+        sameSite: null
+      }
+    ],
+    csp: {
+      enabled: false,
+      weak: false
+    },
+    cors: {
+      configured: false,
+      permissive: false,
+      publicDocumentWildcard: false,
+      wildcardWithCredentials: false
+    },
+    exposure: {
+      server: "gws",
+      poweredBy: "",
+      verbose: false
+    },
+    hsts: {
+      enabled: false,
+      maxAge: 0,
+      strong: false
+    },
+    htmlSignals: {
+      isHtml: true,
+      insecureLoginFormCount: 0,
+      mixedContentCount: 0
+    },
+    isHtml: true,
+    referrerPolicy: {
+      defined: false,
+      value: null,
+      weak: false
+    },
+    securityTxt: {
+      available: true,
+      hasContact: true,
+      hasExpires: true,
+      isExpired: false
+    },
+    tls: {
+      applicable: true,
+      daysUntilExpiry: 45,
+      hasTrustChainWarning: false,
+      isExpiringSoon: false,
+      isValid: true
+    },
+    xFrameOptions: "SAMEORIGIN"
+  };
+  const httpProbe = {
+    success: true,
+    result: {
+      finalUrl: "http://example.com/",
+      redirectChain: [{ location: null, statusCode: 200, url: "http://example.com/" }]
+    }
+  };
+  const httpsProbe = {
+    success: true,
+    result: {
+      redirectChain: [{ location: null, statusCode: 200, url: "https://example.com/" }]
+    }
+  };
+  const securityTxt = {
+    scannedUrl: "https://example.com/.well-known/security.txt"
+  };
+
+  const findings = __internals.sortFindings(__internals.buildFindings({
+    analysis,
+    finalResponse,
+    httpProbe,
+    httpsProbe,
+    securityTxt
+  }));
+  const checks = __internals.buildChecks({
+    analysis,
+    findings,
+    finalResponse,
+    httpProbe,
+    httpsProbe,
+    securityTxt
+  });
+  const score = __internals.scoreChecks(checks);
+  const summary = __internals.buildSummary({
+    checks,
+    findings,
+    httpProbe,
+    httpsProbe,
+    score
+  });
+
+  assert.equal(summary.riskLevel, "Moderate");
+  assert.equal(summary.counts.high, 0);
+  assert.equal(summary.categoryCounts.direct, 0);
+  assert.ok(summary.score >= 75);
+});
+
+test("buildSummary still escalates direct browser-facing issues", () => {
+  const finalResponse = {
+    headers: {},
+    tls: {
+      authorizationError: null
+    }
+  };
+  const analysis = {
+    cookies: [],
+    csp: {
+      enabled: true,
+      weak: false
+    },
+    cors: {
+      configured: false,
+      permissive: false,
+      publicDocumentWildcard: false,
+      wildcardWithCredentials: false
+    },
+    exposure: {
+      server: "nginx",
+      poweredBy: "",
+      verbose: false
+    },
+    hsts: {
+      enabled: true,
+      maxAge: 31_536_000,
+      strong: true
+    },
+    htmlSignals: {
+      isHtml: true,
+      insecureLoginFormCount: 0,
+      mixedContentCount: 2
+    },
+    isHtml: true,
+    referrerPolicy: {
+      defined: true,
+      value: "strict-origin-when-cross-origin",
+      weak: false
+    },
+    securityTxt: {
+      available: true,
+      hasContact: true,
+      hasExpires: true,
+      isExpired: false
+    },
+    tls: {
+      applicable: true,
+      daysUntilExpiry: 45,
+      hasTrustChainWarning: false,
+      isExpiringSoon: false,
+      isValid: true
+    },
+    xFrameOptions: "SAMEORIGIN"
+  };
+  const httpProbe = {
+    success: true,
+    result: {
+      finalUrl: "https://example.com/",
+      redirectChain: [{ location: "https://example.com/", statusCode: 301, url: "http://example.com/" }]
+    }
+  };
+  const httpsProbe = {
+    success: true,
+    result: {
+      redirectChain: [{ location: null, statusCode: 200, url: "https://example.com/" }]
+    }
+  };
+  const securityTxt = {
+    scannedUrl: "https://example.com/.well-known/security.txt"
+  };
+
+  const findings = __internals.sortFindings(__internals.buildFindings({
+    analysis,
+    finalResponse,
+    httpProbe,
+    httpsProbe,
+    securityTxt
+  }));
+  const checks = __internals.buildChecks({
+    analysis,
+    findings,
+    finalResponse,
+    httpProbe,
+    httpsProbe,
+    securityTxt
+  });
+  const score = __internals.scoreChecks(checks);
+  const summary = __internals.buildSummary({
+    checks,
+    findings,
+    httpProbe,
+    httpsProbe,
+    score
+  });
+
+  assert.equal(summary.riskLevel, "High");
+  assert.ok(findings.some((finding) => finding.id === "mixed_content" && finding.category === "direct"));
+});
+
 test("requestOnce truncates oversized text bodies and returns partial evidence safely", async () => {
   const server = http.createServer((request, response) => {
     response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
