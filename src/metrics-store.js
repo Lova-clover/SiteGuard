@@ -68,6 +68,37 @@ function parseRecentEntry(entry) {
   }
 }
 
+function normalizeTopDomainsResponse(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return [];
+  }
+
+  if (entries.every((entry) => entry && typeof entry === "object" && "member" in entry && "score" in entry)) {
+    return entries.map((entry) => ({
+      count: toInteger(entry.score),
+      hostname: String(entry.member || "")
+    }));
+  }
+
+  if (entries.every((entry) => Array.isArray(entry) && entry.length >= 2)) {
+    return entries.map((entry) => ({
+      count: toInteger(entry[1]),
+      hostname: String(entry[0] || "")
+    }));
+  }
+
+  const normalized = [];
+  for (let index = 0; index < entries.length; index += 2) {
+    const hostname = String(entries[index] || "");
+    const count = toInteger(entries[index + 1]);
+    if (hostname) {
+      normalized.push({ count, hostname });
+    }
+  }
+
+  return normalized;
+}
+
 function buildDailySeries(days, viewsByDay, scansByDay, uniqueByDay) {
   return days.map((day) => ({
     day,
@@ -384,12 +415,7 @@ class RedisMetricsStore {
         totalRequestsLast7Days: sumValues(Object.values(scansByDay))
       },
       series: buildDailySeries(days, viewsByDay, scansByDay, uniqueVisitorsByDay),
-      topDomains: Array.isArray(topDomains)
-        ? topDomains.map((entry) => ({
-          count: toInteger(entry.score ?? entry[1]),
-          hostname: String(entry.member ?? entry[0] ?? "")
-        })).filter((entry) => entry.hostname)
-        : [],
+      topDomains: normalizeTopDomainsResponse(topDomains).filter((entry) => entry.hostname),
       visitors: {
         pageViewsLast7Days: sumValues(Object.values(viewsByDay)),
         pageViewsToday: toInteger(todayViews),
@@ -407,8 +433,8 @@ class RedisMetricsStore {
 
 export function createMetricsStore(options = {}) {
   const timeZone = options.timeZone || DEFAULT_TIME_ZONE;
-  const redisUrl = options.url || process.env.UPSTASH_REDIS_REST_URL;
-  const redisToken = options.token || process.env.UPSTASH_REDIS_REST_TOKEN;
+  const redisUrl = options.url || process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
+  const redisToken = options.token || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
   if (options.mode === "memory" || !(redisUrl && redisToken)) {
     return new MemoryMetricsStore({ timeZone });
@@ -427,6 +453,7 @@ export const __metricsInternals = {
   clampDuration,
   createRecentScanEntry,
   formatDayKey,
+  normalizeTopDomainsResponse,
   normalizeHostname,
   normalizePath,
   parseRecentEntry
