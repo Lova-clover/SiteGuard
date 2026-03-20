@@ -12,6 +12,10 @@
   <a href="./README.en.md">English README</a>
 </p>
 
+<p align="center">
+  <a href="https://siteguard-mauve.vercel.app/">Demo</a>
+</p>
+
 ## 소개
 
 SiteGuard는 공개된 `http://` 또는 `https://` URL을 기준으로, 외부에서 확인 가능한 기본 보안 상태를 빠르게 점검하는 도구입니다.
@@ -350,6 +354,10 @@ SiteGuard 자체의 취약점을 발견했다면 공개 이슈 대신 [SECURITY.
 ## 기여
 
 기여 기준, 개발 환경, PR 체크리스트는 [CONTRIBUTING.md](./CONTRIBUTING.md)에 정리해두었습니다.
+
+## 더 읽기
+
+- 개발기: [SiteGuard 개발기: URL 하나로 웹사이트 보안을 점검하는 도구를 만들며 배운 것](https://velog.io/@lova-clover/SiteGuard-%EA%B0%9C%EB%B0%9C%EA%B8%B0-URL-%ED%95%98%EB%82%98%EB%A1%9C-%EC%9B%B9%EC%82%AC%EC%9D%B4%ED%8A%B8-%EB%B3%B4%EC%95%88%EC%9D%84-%EC%A0%90%EA%B2%80%ED%95%98%EB%8A%94-%EB%8F%84%EA%B5%AC%EB%A5%BC-%EB%A7%8C%EB%93%A4%EB%A9%B0-%EB%B0%B0%EC%9A%B4-%EA%B2%83)
 
 ## 라이선스
 
